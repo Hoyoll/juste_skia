@@ -1,24 +1,25 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     ffi::CString,
+    fs::read,
     num::NonZeroU32,
     time::{Duration, Instant},
 };
 
-use gl::{GetIntegerv, RenderbufferStorage, types};
+use gl::{GetIntegerv, types};
 use glutin::{
     config::{Config, ConfigTemplateBuilder},
     context::{ContextApi, ContextAttributesBuilder, PossiblyCurrentContext},
     display::GetGlDisplay,
-    prelude::{GlDisplay, NotCurrentGlContext, PossiblyCurrentGlContext},
+    prelude::{GlDisplay, NotCurrentGlContext},
     surface::{GlSurface, Surface, SurfaceAttributesBuilder, WindowSurface},
 };
 use glutin_winit::{ApiPreference, DisplayBuilder};
 
-use juste::{Element, Io, SignalBus, Vec2};
+use juste::{Element, From, Input, Io, Message, Mode, On, SignalBus, Tag, Vec2, Win};
 use raw_window_handle::HasWindowHandle;
 use skia_safe::{
-    Font, Image, Paint, Rect,
+    Canvas, Data, FontMgr, FontStyle, Image, Typeface,
     colors::WHITE,
     gpu::{
         DirectContext, Protected, SurfaceOrigin, backend_render_targets,
@@ -29,14 +30,24 @@ use skia_safe::{
 };
 use winit::{
     application::ApplicationHandler,
-    event::{DeviceEvent, DeviceId, KeyEvent, MouseScrollDelta, StartCause, WindowEvent},
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    event::{ElementState, KeyEvent, MouseScrollDelta, StartCause, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     keyboard::{KeyCode, PhysicalKey},
     window::{Window, WindowAttributes, WindowId},
 };
 
-fn run(element: Element, attr: WindowAttributes) {
-    let event_loop = EventLoop::builder().build().unwrap();
+use crate::{
+    first_pass,
+    io::{filter_keyboard, filter_mouse},
+    second_pass,
+};
+
+pub const WINDOW: Tag = Tag::Id(-1);
+
+pub fn run(element: Element, attr: WindowAttributes) {
+    let event_loop: EventLoop<Message> = EventLoop::with_user_event().build().unwrap();
+    //let event_loop = EventLoop::builder().build().unwrap();
+
     let (window, gl_config) = {
         let display_builder = DisplayBuilder::new()
             .with_window_attributes(Some(attr))
@@ -49,15 +60,20 @@ fn run(element: Element, attr: WindowAttributes) {
     };
     let mut io = Io::new();
     let size = window.inner_size();
-    io.window_size = Vec2::new(size.width, size.height);
+    io.window_size = Vec2::new(size.width as f32, size.height as f32);
+    let proxy = event_loop.create_proxy();
     let mut app = App {
         element,
         graphic: None,
         cache: Cache {
             io,
             bus: HashMap::new(),
-            image: HashMap::new(),
-            font: HashMap::new(),
+            image: Images::new(),
+            proxy,
+            font: Fonts {
+                font_mgr: FontMgr::new(),
+                fonts: HashMap::new(),
+            },
             window,
             gl_config,
         },
@@ -73,18 +89,131 @@ struct Graphic {
     sk_surface: skia_safe::Surface,
 }
 
+impl Graphic {
+    fn rebuild_skia_surface(&mut self, size: Vec2<i32>) {
+        let backend_render_target =
+            backend_render_targets::make_gl((size.x, size.y), 0, 8, self.fb_info);
+        self.sk_surface = wrap_backend_render_target(
+            &mut self.gr_context,
+            &backend_render_target,
+            SurfaceOrigin::BottomLeft,
+            skia_safe::ColorType::RGBA8888,
+            None,
+            None,
+        )
+        .unwrap();
+    }
+
+    pub fn destroy(&mut self) {
+        self.gr_context.abandon();
+    }
+}
+
+pub struct Images {
+    pub img: HashMap<String, Image>,
+}
+
+impl Images {
+    pub fn new() -> Self {
+        Self {
+            img: HashMap::new(),
+        }
+    }
+
+    pub fn load(&mut self, name: &str) -> Option<&Image> {
+        if !self.img.contains_key(name) {
+            match read(name) {
+                Err(_) => return None,
+                Ok(bytes) => {
+                    let data = Data::new_copy(&bytes);
+                    match Image::from_encoded(&data) {
+                        Some(img) => {
+                            self.img.insert(name.to_string(), img);
+                        }
+                        None => return None,
+                    }
+                }
+            }
+        }
+        self.img.get(name)
+    }
+}
+
+pub struct Fonts {
+    pub font_mgr: FontMgr,
+    pub fonts: HashMap<juste::Font, Typeface>,
+}
+
+impl Fonts {
+    pub fn new() -> Self {
+        let font_mgr = FontMgr::new();
+        Self {
+            font_mgr,
+            fonts: HashMap::new(),
+        }
+    }
+
+    pub fn load(&mut self, font: &juste::Font) -> Option<&Typeface> {
+        if !self.fonts.contains_key(font) {
+            match font {
+                juste::Font::File(name, idx) => match read(name) {
+                    Err(_) => return None,
+                    Ok(byte) => {
+                        let data = Data::new_copy(&byte);
+                        let tf = self.font_mgr.new_from_data(&data, Some(*idx as usize));
+                        match tf {
+                            Some(tfc) => {
+                                self.fonts.insert(*font, tfc);
+                            }
+                            None => return None,
+                        }
+                    }
+                },
+                juste::Font::Sys(str, mode) => {
+                    let tf = self.font_mgr.match_family_style(str, font_style(mode));
+                    match tf {
+                        Some(tfc) => {
+                            self.fonts.insert(*font, tfc);
+                        }
+                        None => {
+                            println!("font does not exist on the system!");
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+        self.fonts.get(font)
+    }
+}
+
+fn font_style(mode: &Mode) -> FontStyle {
+    match mode {
+        Mode::Normal => FontStyle::normal(),
+        Mode::Bold => FontStyle::bold(),
+        Mode::Italic => FontStyle::italic(),
+    }
+}
+
 pub struct Cache {
     pub io: Io,
     pub bus: SignalBus,
-    pub image: HashMap<String, Image>,
-    pub font: HashMap<&'static str, Font>,
+    pub image: Images,
+    pub proxy: EventLoopProxy<Message>,
+    pub font: Fonts,
     pub window: Window,
     pub gl_config: Config,
 }
 
-struct App {
-    element: Element,
-    cache: Cache,
+pub trait Handler {
+    fn draw(&mut self, canvas: &Canvas);
+    fn input(&mut self, event: Input);
+}
+
+pub struct App {
+    pub element: Element,
+    pub cache: Cache,
+    //pub handler: T,
     graphic: Option<Graphic>,
 }
 
@@ -92,15 +221,22 @@ impl App {
     fn draw(&mut self) {
         match self.graphic.as_mut() {
             Some(graphic) => {
-                let canvas = graphic.sk_surface.canvas();
+                let mut canvas = graphic.sk_surface.canvas();
                 canvas.clear(WHITE);
-                canvas.draw_rect(
-                    Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-                    Paint::default().set_argb(255, 0, 255, 0),
-                );
-
+                first_pass(&mut self.element, &mut self.cache);
+                second_pass(&mut self.element, &mut canvas, &mut self.cache);
                 graphic.gr_context.flush_and_submit();
                 graphic.gl_surface.swap_buffers(&graphic.context).unwrap();
+                self.send_message();
+            }
+            None => (),
+        }
+    }
+
+    fn send_message(&mut self) {
+        match self.cache.bus.remove(&WINDOW) {
+            Some(event) => {
+                let _ = self.cache.proxy.send_event(event);
             }
             None => (),
         }
@@ -110,21 +246,7 @@ impl App {
         match self.graphic.as_mut() {
             Some(graphic) => {
                 let size = self.cache.window.inner_size();
-                let backend_render_target = backend_render_targets::make_gl(
-                    (size.width as i32, size.height as i32),
-                    0,
-                    8,
-                    graphic.fb_info,
-                );
-                graphic.sk_surface = wrap_backend_render_target(
-                    &mut graphic.gr_context,
-                    &backend_render_target,
-                    SurfaceOrigin::BottomLeft,
-                    skia_safe::ColorType::RGBA8888,
-                    None,
-                    None,
-                )
-                .unwrap();
+                graphic.rebuild_skia_surface(Vec2::new(size.width as i32, size.height as i32));
             }
             None => (),
         }
@@ -203,7 +325,7 @@ impl App {
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<Message> for App {
     fn resumed(&mut self, _event_loop: &ActiveEventLoop) {
         self.build_canvas();
     }
@@ -221,7 +343,7 @@ impl ApplicationHandler for App {
     }
     fn window_event(
         &mut self,
-        _event_loop: &ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         _window_id: WindowId,
         event: WindowEvent,
     ) {
@@ -236,22 +358,37 @@ impl ApplicationHandler for App {
                     logical_key: _,
                     text: _,
                     location: _,
-                    state: _,
+                    state,
                     repeat: _,
                     ..
                 } => match physical_key {
-                    PhysicalKey::Code(key) => match key {
-                        KeyCode::Space => self.cache.window.request_redraw(),
-                        _ => (),
-                    },
+                    PhysicalKey::Code(key) => {
+                        let k = filter_keyboard(key);
+                        let input = match state {
+                            ElementState::Pressed => On::Press(From::Key(k)),
+                            ElementState::Released => On::Release(From::Key(k)),
+                        };
+                        self.cache.io.pool(input);
+                    }
+
                     _ => (),
                 },
             },
-            WindowEvent::RedrawRequested => {
-                self.draw();
+            WindowEvent::MouseInput {
+                device_id: _,
+                state,
+                button,
+            } => {
+                let b = filter_mouse(button);
+                let m = match state {
+                    ElementState::Pressed => On::Press(From::Mouse(b)),
+                    ElementState::Released => On::Release(From::Mouse(b)),
+                };
+                self.cache.io.pool(m);
             }
-
-            WindowEvent::Resized(_) => {
+            WindowEvent::Resized(size) => {
+                self.cache.io.window_size = Vec2::new(size.width as f32, size.height as f32);
+                self.cache.io.pool(On::Window(Win::Resize));
                 self.resize_canvas();
             }
 
@@ -260,17 +397,23 @@ impl ApplicationHandler for App {
                 delta,
                 phase: _,
             } => match delta {
-                MouseScrollDelta::LineDelta(_, _) => {}
+                MouseScrollDelta::LineDelta(_, y) => {
+                    self.cache.io.scroll = y;
+                }
                 MouseScrollDelta::PixelDelta(_) => {}
             },
+            WindowEvent::CloseRequested => {
+                event_loop.exit();
+            }
+            WindowEvent::RedrawRequested => {
+                self.draw();
+            }
             _ => (),
         }
     }
-    fn device_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        device_id: DeviceId,
-        event: DeviceEvent,
-    ) {
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Message) {}
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.graphic.as_mut().unwrap().destroy();
     }
 }

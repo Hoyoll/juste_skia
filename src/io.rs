@@ -1,3 +1,104 @@
-pub fn filter_keyboard() {}
+use juste::On;
+use winit::{
+    event::{ElementState, MouseButton},
+    keyboard::KeyCode,
+};
 
-pub fn filter_mouse() {}
+pub fn filter_mouse(button: MouseButton) -> juste::Mouse {
+    use winit::event::MouseButton::*;
+
+    match button {
+        Left => juste::Mouse::Left,
+        Right => juste::Mouse::Right,
+        Middle => juste::Mouse::Middle,
+        _ => juste::Mouse::Null,
+    }
+}
+pub fn filter_keyboard(code: KeyCode) -> juste::Key {
+    use winit::keyboard::KeyCode::*;
+    match code {
+        KeyA => juste::Key::A,
+        KeyB => juste::Key::B,
+        KeyC => juste::Key::C,
+        KeyD => juste::Key::D,
+        KeyE => juste::Key::E,
+        KeyF => juste::Key::F,
+        KeyG => juste::Key::G,
+        KeyH => juste::Key::H,
+        KeyI => juste::Key::I,
+        KeyJ => juste::Key::J,
+        KeyK => juste::Key::K,
+        KeyL => juste::Key::L,
+        KeyM => juste::Key::M,
+        KeyN => juste::Key::N,
+        KeyO => juste::Key::O,
+        KeyP => juste::Key::P,
+        KeyQ => juste::Key::Q,
+        KeyR => juste::Key::R,
+        KeyS => juste::Key::S,
+        KeyT => juste::Key::T,
+        KeyU => juste::Key::U,
+        KeyV => juste::Key::V,
+        KeyW => juste::Key::W,
+        KeyX => juste::Key::X,
+        KeyY => juste::Key::Y,
+        KeyZ => juste::Key::Z,
+
+        Digit0 | Numpad0 => juste::Key::Num0,
+        Digit1 | Numpad1 => juste::Key::Num1,
+        Digit2 | Numpad2 => juste::Key::Num2,
+        Digit3 | Numpad3 => juste::Key::Num3,
+        Digit4 | Numpad4 => juste::Key::Num4,
+        Digit5 | Numpad5 => juste::Key::Num5,
+        Digit6 | Numpad6 => juste::Key::Num6,
+        Digit7 | Numpad7 => juste::Key::Num7,
+        Digit8 | Numpad8 => juste::Key::Num8,
+        Digit9 | Numpad9 => juste::Key::Num9,
+
+        F1 => juste::Key::F1,
+        F2 => juste::Key::F2,
+        F3 => juste::Key::F3,
+        F4 => juste::Key::F4,
+        F5 => juste::Key::F5,
+        F6 => juste::Key::F6,
+        F7 => juste::Key::F7,
+        F8 => juste::Key::F8,
+        F9 => juste::Key::F9,
+        F10 => juste::Key::F10,
+        F11 => juste::Key::F11,
+        F12 => juste::Key::F12,
+
+        ShiftLeft | ShiftRight => juste::Key::Shift,
+        ControlLeft | ControlRight => juste::Key::Control,
+        AltLeft | AltRight => juste::Key::Alt,
+        SuperLeft | SuperRight => juste::Key::Meta,
+        CapsLock => juste::Key::CapsLock,
+        NumLock => juste::Key::NumLock,
+        ScrollLock => juste::Key::ScrollLock,
+
+        Home => juste::Key::Home,
+        End => juste::Key::End,
+        PageUp => juste::Key::PageUp,
+        PageDown => juste::Key::PageDown,
+        Insert => juste::Key::Insert,
+        Delete => juste::Key::Delete,
+        ArrowLeft => juste::Key::LeftArrow,
+        ArrowRight => juste::Key::RightArrow,
+        ArrowUp => juste::Key::UpArrow,
+        ArrowDown => juste::Key::DownArrow,
+
+        Escape => juste::Key::Escape,
+        Space => juste::Key::Space,
+        Enter | NumpadEnter => juste::Key::Enter,
+        Backspace => juste::Key::Backspace,
+        Tab => juste::Key::Tab,
+        Pause => juste::Key::Pause,
+        PrintScreen => juste::Key::PrintScreen,
+        // Menu => juste::Key::Menu,
+        Power => juste::Key::Power,
+        Sleep => juste::Key::Sleep,
+        WakeUp => juste::Key::Wake,
+
+        _ => juste::Key::Null,
+    }
+}
