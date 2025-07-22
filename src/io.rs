@@ -1,8 +1,4 @@
-use juste::On;
-use winit::{
-    event::{ElementState, MouseButton},
-    keyboard::KeyCode,
-};
+use winit::{event::MouseButton, keyboard::KeyCode};
 
 pub fn filter_mouse(button: MouseButton) -> juste::Mouse {
     use winit::event::MouseButton::*;

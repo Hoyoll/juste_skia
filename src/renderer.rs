@@ -48,7 +48,6 @@ pub const WINDOW: Tag = Tag::Id(-1);
 
 pub fn run(element: Element, attr: WindowAttributes) {
     let event_loop: EventLoop<Message> = EventLoop::with_user_event().build().unwrap();
-    //let event_loop = EventLoop::builder().build().unwrap();
 
     let (window, gl_config) = {
         let display_builder = DisplayBuilder::new()
