@@ -33,14 +33,20 @@ pub fn first_pass(element: &mut Element, cache: &mut Cache) {
                 Genus::Img {
                     style,
                     img_path,
+                    fallback,
                     scale,
                 } => match cache.image.load(&img_path) {
                     Some(img) => {
                         calculate_image(&mut element.bound, img, style, &scale);
                     }
-                    None => {
-                        reset(element);
-                    }
+                    None => match fallback {
+                        None => reset(element),
+                        Some(f) => {
+                            let mut f_bound = f(&cache.io);
+                            first_pass(&mut f_bound, cache);
+                            element.bound = f_bound.bound;
+                        }
+                    },
                 },
             }
         }
@@ -90,7 +96,6 @@ fn calculate_text(
         style.pad.top,
         style.pad.low,
     ];
-    //dbg!(rec);
     bound.dim.x = rec.width();
     bound.dim.y = rec.height();
 }
@@ -316,9 +321,17 @@ pub fn second_pass(element: &mut Element, canvas: &Canvas, cache: &mut Cache) {
             Genus::Img {
                 style,
                 img_path,
+                fallback,
                 scale: _,
             } => match cache.image.load(&img_path) {
-                None => return,
+                None => match fallback {
+                    None => return,
+                    Some(f) => {
+                        let mut f_element = f(&cache.io);
+                        f_element.bound = element.bound;
+                        second_pass(&mut f_element, canvas, cache);
+                    }
+                },
                 Some(img) => {
                     let rec = Rect::from_xywh(
                         element.bound.pos.x,
@@ -379,15 +392,3 @@ where
     fun(canvas);
     canvas.restore();
 }
-
-fn snap(i: f32) -> f32 {
-    i.round()
-}
-
-// fn matrix_rotation(element: &Element) -> Matrix {
-//     let pivot = Point::new(
-//         element.bound.pos.x + (element.bound.dim.x / 2.0),
-//         element.bound.pos.y + (element.bound.dim.y / 2.0),
-//     );
-//     Matrix::rotate_deg_pivot(element.bound.angle, pivot)
-// }

@@ -1,6 +1,6 @@
 [package]
 name = "juste_skia"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 
 [dependencies]
@@ -11,4 +11,5 @@ glutin-winit = "0.5.0"
 raw-window-handle = "0.6.2"
 skia-safe = { version = "0.87.0", features = ["gl"] }
 winit = "0.30.11"
-juste = { path = "D:/project/rust/juste"}
+juste = "0.0.2"
+reqwest = { version = "0.12.22", features = ["blocking"] }

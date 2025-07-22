@@ -1,9 +1,9 @@
-use juste::{Bound, Element, Font, Genus, Gravity, Io, Message, Pad, Size, Style, Tag};
+use juste::{Bound, Element, Font, Genus, Gravity, Io, Message, Pad, Size, Src, Style, Tag};
 use juste_skia::run;
 use winit::window::WindowAttributes;
 
 fn laop(element: &mut Element, _io: &Io) -> Option<(Tag, Message)> {
-    element.bound.angle += 0.0;
+    element.bound.angle += 0.5;
 
     None
 }
@@ -14,6 +14,30 @@ fn box_loop(element: &mut Element, _io: &Io) -> Option<(Tag, Message)> {
     None
 }
 
+fn fallback(_io: &Io) -> Element {
+    let b = Element {
+        tag: Tag::Def,
+        genus: Genus::Box {
+            style: Style {
+                pad: Pad {
+                    top: 0.0,
+                    low: 10.0,
+                    right: 0.0,
+                    left: 0.0,
+                },
+                color: [0, 0, 255, 255],
+            },
+            gravity: Gravity::Horizontal,
+            size: [Size::Window, Size::Man(30.0)],
+            ceil: None,
+            children: vec![],
+        },
+        bound: Bound::new(),
+        signal_listener: None,
+        io_listener: None,
+    };
+    b
+}
 fn main() {
     let img = Element {
         tag: Tag::Def,
@@ -22,8 +46,9 @@ fn main() {
                 pad: Pad::new(),
                 color: [0, 0, 0, 255],
             },
-            img_path: "C:/Users/HP/Pictures/waifu/ptsd.jpeg".to_string(),
-            scale: 1.0,
+            img_path: Src::Url("https://placehold.co/800@3x.png".to_string()),
+            scale: 0.2,
+            fallback: Some(fallback),
         },
         bound: Bound::new(),
         signal_listener: None,

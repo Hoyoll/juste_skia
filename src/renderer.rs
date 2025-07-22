@@ -3,6 +3,7 @@ use std::{
     ffi::CString,
     fs::read,
     num::NonZeroU32,
+    thread,
     time::{Duration, Instant},
 };
 
@@ -16,10 +17,11 @@ use glutin::{
 };
 use glutin_winit::{ApiPreference, DisplayBuilder};
 
-use juste::{Element, From, Input, Io, Message, Mode, On, SignalBus, Tag, Vec2, Win};
+use juste::{Element, From, Io, Message, Mode, On, SignalBus, Src, Tag, Vec2, Win};
 use raw_window_handle::HasWindowHandle;
+use reqwest::blocking;
 use skia_safe::{
-    Canvas, Data, FontMgr, FontStyle, Image, Typeface,
+    Data, FontMgr, FontStyle, Image, Typeface,
     colors::WHITE,
     gpu::{
         DirectContext, Protected, SurfaceOrigin, backend_render_targets,
@@ -32,7 +34,7 @@ use winit::{
     application::ApplicationHandler,
     event::{ElementState, KeyEvent, MouseScrollDelta, StartCause, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
-    keyboard::{KeyCode, PhysicalKey},
+    keyboard::PhysicalKey,
     window::{Window, WindowAttributes, WindowId},
 };
 
@@ -110,28 +112,52 @@ impl Graphic {
 }
 
 pub struct Images {
-    pub img: HashMap<String, Image>,
+    pub img: HashMap<Src, Image>,
+    pub client: blocking::Client,
 }
 
 impl Images {
     pub fn new() -> Self {
         Self {
             img: HashMap::new(),
+            client: blocking::Client::new(),
         }
     }
 
-    pub fn load(&mut self, name: &str) -> Option<&Image> {
+    pub fn load(&mut self, name: &Src) -> Option<&Image> {
         if !self.img.contains_key(name) {
-            match read(name) {
-                Err(_) => return None,
-                Ok(bytes) => {
-                    let data = Data::new_copy(&bytes);
-                    match Image::from_encoded(&data) {
-                        Some(img) => {
-                            self.img.insert(name.to_string(), img);
+            match name {
+                Src::Sys(file) => match read(file) {
+                    Err(_) => return None,
+                    Ok(bytes) => {
+                        let data = Data::new_copy(&bytes);
+                        match Image::from_encoded(&data) {
+                            Some(img) => {
+                                self.img.insert(name.clone(), img);
+                            }
+                            None => return None,
                         }
-                        None => return None,
                     }
+                },
+                Src::Url(url) => {
+                    thread::scope(|s| {
+                        s.spawn(|| {
+                            let req = self.client.get(url).send();
+                            match req {
+                                Ok(response) => match response.bytes() {
+                                    Ok(b) => {
+                                        let data = Data::new_copy(&b);
+                                        let img = Image::from_encoded(data);
+                                        if let Some(image) = img {
+                                            self.img.insert(name.clone(), image);
+                                        }
+                                    }
+                                    Err(_) => return,
+                                },
+                                Err(_) => return,
+                            }
+                        });
+                    });
                 }
             }
         }
@@ -205,15 +231,9 @@ pub struct Cache {
     pub gl_config: Config,
 }
 
-pub trait Handler {
-    fn draw(&mut self, canvas: &Canvas);
-    fn input(&mut self, event: Input);
-}
-
 pub struct App {
     pub element: Element,
     pub cache: Cache,
-    //pub handler: T,
     graphic: Option<Graphic>,
 }
 
@@ -228,6 +248,7 @@ impl App {
                 graphic.gr_context.flush_and_submit();
                 graphic.gl_surface.swap_buffers(&graphic.context).unwrap();
                 self.send_message();
+                self.cache.io.clean();
             }
             None => (),
         }
