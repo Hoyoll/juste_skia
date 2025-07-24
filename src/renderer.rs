@@ -18,12 +18,11 @@ use glutin::{
 };
 use glutin_winit::{ApiPreference, DisplayBuilder};
 
-use juste::{Element, From, Io, Message, Mode, On, SignalBus, Src, Tag, Vec2, Win};
+use juste::{From, Io, Message, Mode, On, SignalBus, Src, Vec2, Win};
 use raw_window_handle::HasWindowHandle;
 use reqwest::blocking;
 use skia_safe::{
     Data, FontMgr, FontStyle, Image, Typeface,
-    colors::WHITE,
     gpu::{
         DirectContext, Protected, SurfaceOrigin, backend_render_targets,
         ganesh::gl::direct_contexts,
@@ -40,14 +39,11 @@ use winit::{
 };
 
 use crate::{
-    LOAD_IMG_SYS, LOAD_IMG_URL, first_pass,
+    app::App,
     io::{filter_keyboard, filter_mouse},
-    second_pass,
 };
 
-pub const WINDOW: Tag = Tag::Id(-1);
-
-pub fn run(element: Element, attr: WindowAttributes) {
+pub fn run<T: App>(app: T, attr: WindowAttributes) {
     let event_loop: EventLoop<Message> = EventLoop::with_user_event().build().unwrap();
 
     let (window, gl_config) = {
@@ -64,8 +60,8 @@ pub fn run(element: Element, attr: WindowAttributes) {
     let size = window.inner_size();
     io.window_size = Vec2::new(size.width as f32, size.height as f32);
     let proxy = event_loop.create_proxy();
-    let mut app = App {
-        element,
+    let mut app = Renderer::<T> {
+        app,
         graphic: None,
         cache: Cache {
             io,
@@ -111,8 +107,10 @@ impl Graphic {
     }
 }
 
-pub const LOAD_IMG: i8 = -1;
-
+pub enum Pick<T> {
+    One(T),
+    All,
+}
 pub struct Images {
     pub img: HashMap<Src, Image>,
     pub sender: Sender<(Src, Image)>,
@@ -163,6 +161,15 @@ impl Images {
         }
         self.img.get(name)
     }
+
+    pub fn invalidate(&mut self, pick: Pick<Src>) {
+        match pick {
+            Pick::All => self.img.clear(),
+            Pick::One(img) => {
+                self.img.remove(&img);
+            }
+        }
+    }
 }
 
 fn load_url(url: String, sender: Sender<(Src, Image)>) {
@@ -183,6 +190,7 @@ fn load_url(url: String, sender: Sender<(Src, Image)>) {
         }
     });
 }
+
 pub struct Fonts {
     pub font_mgr: FontMgr,
     pub fonts: HashMap<juste::Font, Typeface>,
@@ -229,6 +237,15 @@ impl Fonts {
         }
         self.fonts.get(font)
     }
+
+    pub fn invalidate(&mut self, pick: Pick<juste::Font>) {
+        match pick {
+            Pick::One(f) => {
+                self.fonts.remove(&f);
+            }
+            Pick::All => self.fonts.clear(),
+        }
+    }
 }
 
 fn font_style(mode: &Mode) -> FontStyle {
@@ -249,33 +266,19 @@ pub struct Cache {
     pub gl_config: Config,
 }
 
-pub struct App {
-    pub element: Element,
+pub struct Renderer<T: App> {
     pub cache: Cache,
+    pub app: T,
     graphic: Option<Graphic>,
 }
 
-impl App {
+impl<T: App> Renderer<T> {
     fn draw(&mut self) {
         match self.graphic.as_mut() {
             Some(graphic) => {
-                let mut canvas = graphic.sk_surface.canvas();
-                canvas.clear(WHITE);
-                first_pass(&mut self.element, &mut self.cache);
-                second_pass(&mut self.element, &mut canvas, &mut self.cache);
+                self.app.draw(&mut self.cache, graphic.sk_surface.canvas());
                 graphic.gr_context.flush_and_submit();
                 graphic.gl_surface.swap_buffers(&graphic.context).unwrap();
-                self.send_message();
-                self.cache.io.clean();
-            }
-            None => (),
-        }
-    }
-
-    fn send_message(&mut self) {
-        match self.cache.bus.remove(&WINDOW) {
-            Some(event) => {
-                let _ = self.cache.proxy.send_event(event);
             }
             None => (),
         }
@@ -364,7 +367,7 @@ impl App {
     }
 }
 
-impl ApplicationHandler<Message> for App {
+impl<T: App> ApplicationHandler<Message> for Renderer<T> {
     fn resumed(&mut self, _event_loop: &ActiveEventLoop) {
         self.build_canvas();
     }
@@ -454,16 +457,7 @@ impl ApplicationHandler<Message> for App {
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.graphic.as_mut().unwrap().destroy();
     }
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: Message) {
-        match event {
-            Message::Pair(i, url) => match i {
-                LOAD_IMG_SYS => {}
-                LOAD_IMG_URL => {
-                    load_url(url, self.cache.image.sender.clone());
-                }
-                _ => (),
-            },
-            _ => (),
-        }
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Message) {
+        self.app.user_event(event, event_loop);
     }
 }
