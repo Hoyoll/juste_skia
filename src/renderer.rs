@@ -1,8 +1,9 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::CString,
     fs::read,
     num::NonZeroU32,
+    sync::mpsc::{Receiver, Sender, channel},
     thread,
     time::{Duration, Instant},
 };
@@ -39,7 +40,7 @@ use winit::{
 };
 
 use crate::{
-    first_pass,
+    LOAD_IMG_SYS, LOAD_IMG_URL, first_pass,
     io::{filter_keyboard, filter_mouse},
     second_pass,
 };
@@ -110,16 +111,23 @@ impl Graphic {
     }
 }
 
+pub const LOAD_IMG: i8 = -1;
+
 pub struct Images {
     pub img: HashMap<Src, Image>,
-    pub client: blocking::Client,
+    pub sender: Sender<(Src, Image)>,
+    pub receiver: Receiver<(Src, Image)>,
+    pending: HashSet<Src>,
 }
 
 impl Images {
     pub fn new() -> Self {
+        let (sender, receiver) = channel();
         Self {
             img: HashMap::new(),
-            client: blocking::Client::new(),
+            sender,
+            receiver,
+            pending: HashSet::new(),
         }
     }
 
@@ -139,24 +147,17 @@ impl Images {
                     }
                 },
                 Src::Url(url) => {
-                    thread::scope(|s| {
-                        s.spawn(|| {
-                            let req = self.client.get(url).send();
-                            match req {
-                                Ok(response) => match response.bytes() {
-                                    Ok(b) => {
-                                        let data = Data::new_copy(&b);
-                                        let img = Image::from_encoded(data);
-                                        if let Some(image) = img {
-                                            self.img.insert(name.clone(), image);
-                                        }
-                                    }
-                                    Err(_) => return,
-                                },
-                                Err(_) => return,
-                            }
-                        });
-                    });
+                    if !self.pending.contains(name) {
+                        self.pending.insert(name.clone());
+                        load_url(url.to_string(), self.sender.clone());
+                    }
+                    match self.receiver.try_recv() {
+                        Ok((key, image)) => {
+                            self.pending.remove(&key);
+                            self.img.insert(key, image);
+                        }
+                        Err(_) => (),
+                    }
                 }
             }
         }
@@ -164,6 +165,24 @@ impl Images {
     }
 }
 
+fn load_url(url: String, sender: Sender<(Src, Image)>) {
+    thread::spawn(move || {
+        let req = blocking::get(&url);
+        match req {
+            Ok(response) => match response.bytes() {
+                Ok(b) => {
+                    let data = Data::new_copy(&b);
+                    let img = Image::from_encoded(data);
+                    if let Some(image) = img {
+                        let _ = sender.send((Src::Url(url), image));
+                    }
+                }
+                Err(_) => (),
+            },
+            Err(_) => (),
+        }
+    });
+}
 pub struct Fonts {
     pub font_mgr: FontMgr,
     pub fonts: HashMap<juste::Font, Typeface>,
@@ -432,8 +451,19 @@ impl ApplicationHandler<Message> for App {
         }
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Message) {}
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.graphic.as_mut().unwrap().destroy();
+    }
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: Message) {
+        match event {
+            Message::Pair(i, url) => match i {
+                LOAD_IMG_SYS => {}
+                LOAD_IMG_URL => {
+                    load_url(url, self.cache.image.sender.clone());
+                }
+                _ => (),
+            },
+            _ => (),
+        }
     }
 }
