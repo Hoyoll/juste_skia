@@ -1,0 +1,66 @@
+[33mcommit 787ffd7db564919940863670c6e795e17e1098b2[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m
+Author: Effendi <effendi.saputra01@gmail.com>
+Date:   Thu Jul 24 23:44:35 2025 +0700
+
+    some cleaning up
+
+[33mcommit 1b3767c8ca72271feea15de80da146ff34d5f4a6[m
+Author: Effendi <effendi.saputra01@gmail.com>
+Date:   Thu Jul 24 23:25:04 2025 +0700
+
+    some cleaning up
+
+[33mcommit ea354ea29f1b50959d827c45bbb0abe2d9e99078[m
+Author: Effendi <effendi.saputra01@gmail.com>
+Date:   Thu Jul 24 15:54:49 2025 +0700
+
+    achieved backgroud image loading
+
+[33mcommit 00730bb49d35c8c30657f7a0a1dbe9962627a47e[m
+Author: Effendi <effendi.saputra01@gmail.com>
+Date:   Tue Jul 22 23:45:49 2025 +0700
+
+    still need async integration
+
+[33mcommit a6b25ae000b72758f42baa5ea20fbf7c64888758[m
+Author: Effendi <effendi.saputra01@gmail.com>
+Date:   Tue Jul 22 23:36:36 2025 +0700
+
+    still need async integration
+
+[33mcommit 4f3addd7f3f85b45d14d7d0afe71daf5ef1ef8e5[m
+Author: Effendi <effendi.saputra01@gmail.com>
+Date:   Mon Jul 21 23:54:21 2025 +0700
+
+    the feature is complete i suppose...
+
+[33mcommit 9ac6629c3b7435d4362ee5e75792aecd17437f5a[m
+Merge: 81d5de9 cea4a4f
+Author: Effendi <effendi.saputra01@gmail.com>
+Date:   Mon Jul 21 23:53:54 2025 +0700
+
+    yeah
+
+[33mcommit cea4a4f3c8e0441ec3eac9ec4aa814d9e8188bb9[m
+Author: Yuka_E <110441608+Hoyoll@users.noreply.github.com>
+Date:   Mon Jul 21 23:52:27 2025 +0700
+
+    Initial commit
+
+[33mcommit 81d5de98f3c2f8cf1c39ec55492e2e8a9591dabf[m
+Author: Effendi <effendi.saputra01@gmail.com>
+Date:   Tue Jul 15 23:17:18 2025 +0700
+
+    yeah
+
+[33mcommit 96dd4700c6b4b4e57b9e87ba7adaa003b7de96e8[m
+Author: Effendi <effendi.saputra01@gmail.com>
+Date:   Tue Jul 15 14:03:40 2025 +0700
+
+    c++ abi is cursed
+
+[33mcommit 0f9f9bb144bef0a1aea13862dad6beaa5d22b4b6[m
+Author: Effendi <effendi.saputra01@gmail.com>
+Date:   Tue Jul 15 14:01:18 2025 +0700
+
+    c++ abi is cursed
