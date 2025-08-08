@@ -10,5 +10,5 @@ glutin-winit = "0.5.0"
 raw-window-handle = "0.6.2"
 skia-safe = { version = "0.87.0", features = ["gl"] }
 winit = "0.30.11"
-juste = "0.0.2"
+juste = { path = "D:/project/rust/juste" }
 reqwest = { version = "0.12.22", features = ["blocking"] }

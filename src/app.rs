@@ -1,4 +1,4 @@
-use juste::{Io, Message};
+use juste::{element::Message, io::Io};
 use skia_safe::Canvas;
 use winit::event_loop::ActiveEventLoop;
 

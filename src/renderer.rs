@@ -18,11 +18,17 @@ use glutin::{
 };
 use glutin_winit::{ApiPreference, DisplayBuilder};
 
-use juste::{From, Io, Message, Mode, On, SignalBus, Src, Vec2, Win};
+use juste::{
+    element::{Message, SignalBus},
+    genus::Src,
+    io::{From, Io, On, Win},
+    style::{Font, Mode, Sheet},
+    util::Vec2,
+};
 use raw_window_handle::HasWindowHandle;
 use reqwest::blocking;
 use skia_safe::{
-    Data, FontMgr, FontStyle, Image, Typeface,
+    Data, FontMgr, FontStyle, Image, TextBlob, Typeface,
     gpu::{
         DirectContext, Protected, SurfaceOrigin, backend_render_targets,
         ganesh::gl::direct_contexts,
@@ -43,7 +49,7 @@ use crate::{
     io::{filter_keyboard, filter_mouse},
 };
 
-pub fn run<T: App>(app: T, attr: WindowAttributes) {
+pub fn run<T: App>(app: T, attr: WindowAttributes, sheet: Sheet) {
     let event_loop: EventLoop<Message> = EventLoop::with_user_event().build().unwrap();
 
     let (window, gl_config) = {
@@ -67,11 +73,9 @@ pub fn run<T: App>(app: T, attr: WindowAttributes) {
             io,
             bus: HashMap::new(),
             image: Images::new(),
+            sheet,
             proxy,
-            font: Fonts {
-                font_mgr: FontMgr::new(),
-                fonts: HashMap::new(),
-            },
+            font: Fonts::new(),
             window,
             gl_config,
         },
@@ -162,11 +166,11 @@ impl Images {
         self.img.get(name)
     }
 
-    pub fn invalidate(&mut self, pick: Pick<Src>) {
+    pub fn invalidate(&mut self, pick: Pick<&Src>) {
         match pick {
             Pick::All => self.img.clear(),
             Pick::One(img) => {
-                self.img.remove(&img);
+                self.img.remove(img);
             }
         }
     }
@@ -193,7 +197,23 @@ fn load_url(url: String, sender: Sender<(Src, Image)>) {
 
 pub struct Fonts {
     pub font_mgr: FontMgr,
-    pub fonts: HashMap<juste::Font, Typeface>,
+    pub fonts: HashMap<Font, FontAsset>,
+}
+
+pub struct FontAsset {
+    pub tf: Typeface,
+    pub font: skia_safe::Font,
+    pub atlas: HashMap<char, TextBlob>,
+}
+
+impl FontAsset {
+    pub fn get_char(&mut self, char: &char) -> Option<&TextBlob> {
+        if !self.atlas.contains_key(char) {
+            TextBlob::from_str(char.to_string(), &self.font)
+                .map(|blob| self.atlas.insert(*char, blob));
+        }
+        self.atlas.get(char)
+    }
 }
 
 impl Fonts {
@@ -205,45 +225,59 @@ impl Fonts {
         }
     }
 
-    pub fn load(&mut self, font: &juste::Font) -> Option<&Typeface> {
+    pub fn load_asset(&mut self, font: &Font) -> Option<&mut FontAsset> {
         if !self.fonts.contains_key(font) {
             match font {
-                juste::Font::File(name, idx) => match read(name) {
-                    Err(_) => return None,
-                    Ok(byte) => {
-                        let data = Data::new_copy(&byte);
-                        let tf = self.font_mgr.new_from_data(&data, Some(*idx as usize));
-                        match tf {
-                            Some(tfc) => {
-                                self.fonts.insert(*font, tfc);
-                            }
-                            None => return None,
-                        }
+                Font::File { path, ttc, .. } => match read(path) {
+                    Err(_) => None,
+                    Ok(file) => {
+                        let data = Data::new_copy(&file);
+                        self.font_mgr
+                            .new_from_data(&data, Some(*ttc))
+                            .and_then(|tf| {
+                                let tf_font = skia_safe::Font::from_typeface(
+                                    &tf,
+                                    Some(font.get_size() as f32),
+                                );
+                                self.fonts.insert(
+                                    *font,
+                                    FontAsset {
+                                        tf,
+                                        font: tf_font,
+                                        atlas: HashMap::new(),
+                                    },
+                                )
+                            })
                     }
                 },
-                juste::Font::Sys(str, mode) => {
-                    let tf = self.font_mgr.match_family_style(str, font_style(mode));
-                    match tf {
-                        Some(tfc) => {
-                            self.fonts.insert(*font, tfc);
-                        }
-                        None => {
-                            println!("font does not exist on the system!");
-                            return None;
-                        }
-                    }
-                }
-            }
+                Font::Sys { name, mode, .. } => self
+                    .font_mgr
+                    .match_family_style(name, font_style(mode))
+                    .and_then(|tf| {
+                        let tf_font =
+                            skia_safe::Font::from_typeface(&tf, Some(font.get_size() as f32));
+                        self.fonts.insert(
+                            *font,
+                            FontAsset {
+                                tf,
+                                font: tf_font,
+                                atlas: HashMap::new(),
+                            },
+                        )
+                    }),
+            };
         }
-        self.fonts.get(font)
+        self.fonts.get_mut(font)
     }
 
-    pub fn invalidate(&mut self, pick: Pick<juste::Font>) {
-        match pick {
-            Pick::One(f) => {
-                self.fonts.remove(&f);
+    pub fn invalidate(&mut self, font: Pick<&Font>) {
+        match font {
+            Pick::All => {
+                self.fonts.clear();
             }
-            Pick::All => self.fonts.clear(),
+            Pick::One(f) => {
+                self.fonts.remove(f);
+            }
         }
     }
 }
@@ -253,6 +287,7 @@ fn font_style(mode: &Mode) -> FontStyle {
         Mode::Normal => FontStyle::normal(),
         Mode::Bold => FontStyle::bold(),
         Mode::Italic => FontStyle::italic(),
+        Mode::BoldItalic => FontStyle::bold_italic(),
     }
 }
 
@@ -260,6 +295,7 @@ pub struct Cache {
     pub io: Io,
     pub bus: SignalBus,
     pub image: Images,
+    pub sheet: Sheet,
     pub proxy: EventLoopProxy<Message>,
     pub font: Fonts,
     pub window: Window,
