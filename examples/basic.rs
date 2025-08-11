@@ -1,52 +1,53 @@
-use std::collections::HashMap;
+use std::any::Any;
 
 use juste::{
-    element::{Bound, Element, Message, Tag},
-    genus::{Box, Genus},
-    io::Io,
-    style::{Gravity, Size, Style},
-    util::Vec2,
+    element::{Bound, Element, Tag},
+    genus::{Frame, Genus},
+    renderer,
+    style::DEFAULT,
 };
-// use juste::{
-//     Bound, Element, Font, Genus, Gravity, Io, Message, Pad, Size, Src, Style, Tag, style::Sheet,
-// };
-use juste_skia::run;
-use skia_safe::FourByteTag;
+use juste_skia::{
+    app::App,
+    passes::{first_pass, second_pass},
+};
+use skia_safe::{Size, runtime_effect::RuntimeShaderBuilder};
 use winit::window::WindowAttributes;
-
-fn laop(element: &mut Element, _io: &Io) -> Option<(Tag, Message)> {
-    element.bound.angle += 0.5;
-
-    None
+struct Head {
+    element: Element,
 }
 
-fn box_loop(element: &mut Element, _io: &Io) -> Option<(Tag, Message)> {
-    element.bound.angle -= 1.0;
-    element.bound.overflow.make_clip();
-    None
+impl Head {
+    pub fn new() -> Self {
+        let frame = Frame::new();
+        let element = Element {
+            tag: Tag::Def,
+            genus: Genus::Frame(frame),
+            bound: Bound::new(),
+            listener: Some(DEFAULT),
+        };
+        Self { element }
+    }
 }
 
-fn fallback(_io: &Io) -> Element {
-    let b = Element {
-        tag: Tag::Def,
-        genus: Genus::Box(Box {
-            style: Style::new(),
-            gravity: Gravity::Horizontal,
-            size: Vec2::new(Size::Man(10.0), Size::Man(10.0)),
-            ceil: None,
-            children: None,
-        }),
-        bound: Bound::new(),
-        listener: None,
-    };
-    b
+impl App for Head {
+    fn draw(&mut self, cache: &mut juste_skia::renderer::Cache, canvas: &skia_safe::Canvas) {
+        first_pass(&mut self.element, cache);
+        second_pass(&mut self.element, canvas, cache);
+    }
+
+    fn user_event(
+        &mut self,
+        message: juste::element::Message,
+        cache: &mut juste_skia::renderer::Cache,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+    ) {
+    }
 }
+
 fn main() {
-    let img = Element {
-        tag: Tag::Def,
-        genus: Genus::Img(),
-        bound: Bound::new(),
-        listener: None,
-    };
-    run(b, attr, HashMap::new());
+    //
+    let attr = WindowAttributes::default();
+    // fs::read(path)
+    // String::from_utf8(fs::read()
+    // juste_skia::renderer::run(Head::new(), attr, sheet);
 }

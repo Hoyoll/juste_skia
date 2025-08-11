@@ -71,7 +71,7 @@ pub fn run<T: App>(app: T, attr: WindowAttributes, sheet: Sheet) {
         graphic: None,
         cache: Cache {
             io,
-            bus: HashMap::new(),
+            bus: SignalBus::new(),
             image: Images::new(),
             sheet,
             proxy,
@@ -315,6 +315,9 @@ impl<T: App> Renderer<T> {
                 self.app.draw(&mut self.cache, graphic.sk_surface.canvas());
                 graphic.gr_context.flush_and_submit();
                 graphic.gl_surface.swap_buffers(&graphic.context).unwrap();
+                while let Some(msg) = self.cache.bus.queue.pop() {
+                    let _ = self.cache.proxy.send_event(msg);
+                }
             }
             None => (),
         }
@@ -494,6 +497,6 @@ impl<T: App> ApplicationHandler<Message> for Renderer<T> {
         self.graphic.as_mut().unwrap().destroy();
     }
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Message) {
-        self.app.user_event(event, event_loop);
+        self.app.user_event(event, &mut self.cache, event_loop);
     }
 }

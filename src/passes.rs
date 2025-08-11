@@ -1,18 +1,26 @@
 use juste::{
     element::{Bound, Element},
-    genus::{Box, Genus, Image, Input, State, Text, Token},
-    style::{Color, Gravity, Origin, Pad, Size},
+    genus::{Frame, Genus, Image, Input, State, Text, Token},
+    style::{Color, DEFAULT, Gravity, Pad, Size},
 };
 use skia_safe::{Canvas, ClipOp, Matrix, Paint, Path, Rect};
 
 use crate::renderer::Cache;
 
 pub fn first_pass(element: &mut Element, cache: &mut Cache) {
-    element.listen_io(&cache.io).map(|s| {
-        let (idx, msg) = s;
-        cache.bus.insert(idx, msg);
-    });
-    element.listen_signal(&mut cache.bus);
+    match &element.listener {
+        None => (),
+        Some(id) => match cache.sheet.listener.get_mut(id) {
+            None => (),
+            Some(list) => {
+                list.listen_io(element, &cache.io).map(|s| {
+                    let (idx, msg) = s;
+                    cache.bus.insert(idx, msg);
+                });
+                list.listen_bus(element, &mut cache.bus);
+            }
+        },
+    }
     match &mut element.genus {
         Genus::Input(input) => {
             calc_input(&mut element.bound, cache, input);
@@ -25,7 +33,7 @@ pub fn first_pass(element: &mut Element, cache: &mut Cache) {
             });
             calc_box(&mut element.bound, cache, b);
         }
-        Genus::Box(b) => {
+        Genus::Frame(b) | Genus::Float(b) => {
             b.children.as_mut().map(|c| {
                 c.iter_mut(|child| {
                     first_pass(child, cache);
@@ -51,7 +59,7 @@ pub fn silent_first_pass(element: &mut Element, cache: &mut Cache) {
             });
             calc_box(&mut element.bound, cache, b);
         }
-        Genus::Box(b) => {
+        Genus::Frame(b) | Genus::Float(b) => {
             b.children.as_mut().map(|c| {
                 c.iter_mut(|child| {
                     silent_first_pass(child, cache);
@@ -64,10 +72,10 @@ pub fn silent_first_pass(element: &mut Element, cache: &mut Cache) {
     }
 }
 
-fn calc_box(bound: &mut Bound, cache: &mut Cache, b: &mut Box) {
-    let pad = match &b.style.pad {
-        Origin::Id(id) => cache.sheet.pads.get(id).unwrap(),
-        Origin::Raw(pad) => pad,
+fn calc_box(bound: &mut Bound, cache: &mut Cache, b: &mut Frame) {
+    let pad = match cache.sheet.pads.get(&b.style.pad) {
+        Some(p) => p,
+        None => cache.sheet.pads.get(&DEFAULT).unwrap(),
     };
     put_pad(bound, pad);
     let width = b.size.x;
@@ -75,10 +83,12 @@ fn calc_box(bound: &mut Bound, cache: &mut Cache, b: &mut Box) {
     bound.dim.x = match width {
         Size::Window => cache.io.window_size.x,
         Size::Man(man) => man,
-        Size::Child => b.children.as_ref().map_or(0.0, |c| {
+        Size::Child => b.children.as_mut().map_or(0.0, |c| {
             let mut temp_w = 0.0;
-            c.iter(|child| {
-                temp_w += child.bound.dim.x + child.bound.shadow[0] + child.bound.shadow[1];
+            c.iter_mut(|child| {
+                child.position(|bound| {
+                    temp_w += bound.dim.x + bound.shadow[0] + bound.shadow[1];
+                });
             });
             temp_w
         }),
@@ -89,10 +99,12 @@ fn calc_box(bound: &mut Bound, cache: &mut Cache, b: &mut Box) {
         Size::Window => cache.io.window_size.y,
         Size::Man(man) => man,
         Size::Func(fun) => fun(&cache.io),
-        Size::Child => b.children.as_ref().map_or(0.0, |c| {
+        Size::Child => b.children.as_mut().map_or(0.0, |c| {
             let mut temp_y = 0.0;
-            c.iter(|child| {
-                temp_y += child.bound.dim.y + child.bound.shadow[2] + child.bound.shadow[3];
+            c.iter_mut(|child| {
+                child.position(|bound| {
+                    temp_y += bound.dim.y + bound.shadow[2] + bound.shadow[3];
+                });
             });
             temp_y
         }),
@@ -150,17 +162,17 @@ fn calc_box(bound: &mut Bound, cache: &mut Cache, b: &mut Box) {
 }
 
 fn calc_input(bound: &mut Bound, cache: &mut Cache, input: &Input) {
-    let pad = match &input.style.style.pad {
-        Origin::Id(id) => cache.sheet.pads.get(id).unwrap(),
-        Origin::Raw(pad) => pad,
+    let pad = match cache.sheet.pads.get(&input.style.style.pad) {
+        Some(p) => p,
+        None => cache.sheet.pads.get(&DEFAULT).unwrap(),
     };
     put_pad(bound, pad);
     bound.dim.y = input.token_size.y;
 }
 fn calc_image(bound: &mut Bound, cache: &mut Cache, img: &Image) {
-    let pad = match &img.style.pad {
-        Origin::Id(id) => cache.sheet.pads.get(id).unwrap(),
-        Origin::Raw(pad) => pad,
+    let pad = match cache.sheet.pads.get(&img.style.pad) {
+        Some(p) => p,
+        None => cache.sheet.pads.get(&DEFAULT).unwrap(),
     };
     put_pad(bound, pad);
     match cache.image.load(&img.img_path) {
@@ -178,15 +190,16 @@ fn calc_image(bound: &mut Bound, cache: &mut Cache, img: &Image) {
 }
 
 fn calc_text(bound: &mut Bound, cache: &mut Cache, text: &Text) {
-    let pad = match &text.style.style.pad {
-        Origin::Id(id) => cache.sheet.pads.get(id).unwrap(),
-        Origin::Raw(pad) => pad,
+    let pad = match cache.sheet.pads.get(&text.style.style.pad) {
+        Some(p) => p,
+        None => cache.sheet.pads.get(&DEFAULT).unwrap(),
     };
     put_pad(bound, pad);
-    let f = match &text.style.font {
-        Origin::Id(id) => cache.sheet.fonts.get(id).unwrap(),
-        Origin::Raw(font) => font,
+    let f = match cache.sheet.fonts.get(&text.style.font) {
+        Some(f) => f,
+        None => cache.sheet.fonts.get(&DEFAULT).unwrap(),
     };
+
     cache.font.load_asset(f).map(|asset| {
         let (_, rect) = asset.font.measure_str(&text.text, None);
         bound.dim.x = rect.width();
@@ -203,15 +216,17 @@ pub fn second_pass(element: &mut Element, canvas: &Canvas, cache: &mut Cache) {
         Genus::Img(img) => pos_img(&mut element.bound, canvas, cache, img),
         Genus::Text(text) => pos_text(&mut element.bound, canvas, cache, text),
         Genus::Input(input) => pos_input(&mut element.bound, canvas, cache, input),
-        Genus::Box(b) | Genus::Cult(b) => pos_box(&mut element.bound, canvas, cache, b),
+        Genus::Frame(b) | Genus::Cult(b) | Genus::Float(b) => {
+            pos_box(&mut element.bound, canvas, cache, b)
+        }
     }
 }
 
-fn pos_box(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, b: &mut Box) {
+fn pos_box(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, b: &mut Frame) {
     let rec = Rect::from_xywh(bound.pos.x, bound.pos.y, bound.dim.x, bound.dim.y);
-    let col = match &b.style.color {
-        Origin::Id(id) => cache.sheet.colors.get(id).unwrap(),
-        Origin::Raw(c) => c,
+    let col = match cache.sheet.colors.get(&b.style.color) {
+        Some(c) => c,
+        None => cache.sheet.colors.get(&DEFAULT).unwrap(),
     };
     if let Some(angle) = &bound.angle {
         scope(canvas, |c| {
@@ -238,10 +253,12 @@ fn pos_box(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, b: &mut Box) {
             Gravity::Horizontal => {
                 b.children.as_mut().map(|c| {
                     c.iter_mut(|child| {
-                        offset_x += child.bound.shadow[0];
-                        child.bound.pos.x = offset_x;
-                        child.bound.pos.y = offset_y + child.bound.shadow[2];
-                        offset_x += child.bound.dim.x + child.bound.shadow[1];
+                        child.position(|bound| {
+                            offset_x += bound.shadow[0];
+                            bound.pos.x = offset_x;
+                            bound.pos.y = offset_y + bound.shadow[2];
+                            offset_x += bound.dim.x + bound.shadow[1];
+                        });
                         second_pass(child, canvas, cache);
                     })
                 });
@@ -249,10 +266,12 @@ fn pos_box(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, b: &mut Box) {
             Gravity::Vertical => {
                 b.children.as_mut().map(|c| {
                     c.iter_mut(|child| {
-                        offset_y += child.bound.shadow[2];
-                        child.bound.pos.x = offset_x + child.bound.shadow[0];
-                        child.bound.pos.y = offset_y;
-                        offset_y += child.bound.dim.y + child.bound.shadow[3];
+                        child.position(|bound| {
+                            offset_y += bound.shadow[2];
+                            bound.pos.x = offset_x + bound.shadow[0];
+                            bound.pos.y = offset_y;
+                            offset_y += bound.dim.y + bound.shadow[3];
+                        });
                         second_pass(child, canvas, cache);
                     })
                 });
@@ -264,10 +283,12 @@ fn pos_img(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, img: &Image) {
     match cache.image.load(&img.img_path) {
         Some(image) => {
             let rec = Rect::from_xywh(bound.pos.x, bound.pos.y, bound.dim.x, bound.dim.y);
-            let col = match &img.style.color {
-                Origin::Id(id) => cache.sheet.colors.get(id).unwrap(),
-                Origin::Raw(color) => color,
+
+            let col = match cache.sheet.colors.get(&img.style.color) {
+                Some(c) => c,
+                None => cache.sheet.colors.get(&DEFAULT).unwrap(),
             };
+
             let paint = build_paint(col);
             if let Some(angle) = &bound.angle {
                 scope(canvas, |c| {
@@ -291,67 +312,178 @@ fn pos_img(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, img: &Image) {
     }
 }
 fn pos_input(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, input: &Input) {
-    let col = match &input.style.style.color {
-        Origin::Id(id) => cache.sheet.colors.get(id).unwrap(),
-        Origin::Raw(color) => color,
+    let col = match cache.sheet.colors.get(&input.style.style.color) {
+        Some(c) => c,
+        None => cache.sheet.colors.get(&DEFAULT).unwrap(),
     };
+
     let paint = build_paint(col);
-    let f = match &input.style.font {
-        Origin::Raw(f) => f,
-        Origin::Id(id) => cache.sheet.fonts.get(id).unwrap(),
+
+    let f = match cache.sheet.fonts.get(&input.style.font) {
+        Some(f) => f,
+        None => cache.sheet.fonts.get(&DEFAULT).unwrap(),
     };
     let font = cache.font.load_asset(f).unwrap();
     let mut offset = 0.0;
-    input.stream.left.iter().for_each(|token| match token {
-        Token::Space => offset += input.token_size.x,
-        Token::Char(c) => match font.get_char(c) {
-            Some(c) => {
-                canvas.draw_text_blob(c, (bound.pos.x + offset, bound.pos.y), &paint);
-                offset += input.token_size.x;
-            }
-            None => offset += input.token_size.x,
-        },
-    });
-    let offset_left = offset;
-    input
-        .stream
-        .right
-        .iter()
-        .rev()
-        .for_each(|token| match token {
-            Token::Space => offset += input.token_size.x,
-            Token::Char(c) => match font.get_char(c) {
-                Some(c) => {
-                    canvas.draw_text_blob(c, (bound.pos.x + offset, bound.pos.y), &paint);
-                    offset += input.token_size.x;
+    match input.state {
+        State::Hidden => {
+            input.stream.left.iter().for_each(|token| match token {
+                Token::Space => offset += input.token_size.x,
+                Token::Char(chars) => {
+                    chars.left.iter().for_each(|c| match font.get_char(c) {
+                        Some(c) => {
+                            canvas.draw_text_blob(c, (bound.pos.x + offset, bound.pos.y), &paint);
+                            offset += input.token_size.x;
+                        }
+                        None => {
+                            offset += input.token_size.x;
+                        }
+                    });
+                    chars
+                        .right
+                        .iter()
+                        .rev()
+                        .for_each(|c| match font.get_char(c) {
+                            Some(c) => {
+                                canvas.draw_text_blob(
+                                    c,
+                                    (bound.pos.x + offset, bound.pos.y),
+                                    &paint,
+                                );
+                                offset += input.token_size.x;
+                            }
+                            None => {
+                                offset += input.token_size.x;
+                            }
+                        });
                 }
-                None => offset += input.token_size.x,
-            },
-        });
-    if let State::Hidden = input.state {
-        return;
+                _ => (),
+            });
+            input
+                .stream
+                .right
+                .iter()
+                .rev()
+                .for_each(|token| match token {
+                    Token::Space => offset += input.token_size.x,
+                    Token::Char(chars) => {
+                        chars
+                            .right
+                            .iter()
+                            .rev()
+                            .for_each(|c| match font.get_char(c) {
+                                Some(c) => {
+                                    canvas.draw_text_blob(
+                                        c,
+                                        (bound.pos.x + offset, bound.pos.y),
+                                        &paint,
+                                    );
+                                    offset += input.token_size.x;
+                                }
+                                None => {
+                                    offset += input.token_size.x;
+                                }
+                            });
+                    }
+                    _ => (),
+                });
+        }
+        _ => {
+            let mut offset_left = offset;
+            input.stream.left.iter().for_each(|token| match token {
+                Token::Space => {
+                    offset += input.token_size.x;
+                    offset_left = offset;
+                }
+                Token::Char(chars) => {
+                    chars.left.iter().for_each(|c| match font.get_char(c) {
+                        Some(c) => {
+                            canvas.draw_text_blob(c, (bound.pos.x + offset, bound.pos.y), &paint);
+                            offset += input.token_size.x;
+                        }
+                        None => {
+                            offset += input.token_size.x;
+                        }
+                    });
+                    offset_left = offset;
+                    chars
+                        .right
+                        .iter()
+                        .rev()
+                        .for_each(|c| match font.get_char(c) {
+                            Some(c) => {
+                                canvas.draw_text_blob(
+                                    c,
+                                    (bound.pos.x + offset, bound.pos.y),
+                                    &paint,
+                                );
+                                offset += input.token_size.x;
+                            }
+                            None => {
+                                offset += input.token_size.x;
+                            }
+                        });
+                }
+                _ => (),
+            });
+            let c_col = match cache.sheet.colors.get(&input.cursor.color) {
+                Some(c) => c,
+                None => cache.sheet.colors.get(&DEFAULT).unwrap(),
+            };
+            let p = build_paint(c_col);
+            canvas.draw_rect(
+                &Rect::from_xywh(
+                    bound.pos.x + offset_left,
+                    bound.pos.y,
+                    input.cursor.width,
+                    input.token_size.y,
+                ),
+                &p,
+            );
+            input
+                .stream
+                .right
+                .iter()
+                .rev()
+                .for_each(|token| match token {
+                    Token::Space => offset += input.token_size.x,
+                    Token::Char(chars) => {
+                        chars
+                            .right
+                            .iter()
+                            .rev()
+                            .for_each(|c| match font.get_char(c) {
+                                Some(c) => {
+                                    canvas.draw_text_blob(
+                                        c,
+                                        (bound.pos.x + offset, bound.pos.y),
+                                        &paint,
+                                    );
+                                    offset += input.token_size.x;
+                                }
+                                None => {
+                                    offset += input.token_size.x;
+                                }
+                            });
+                    }
+                    _ => (),
+                });
+        }
     }
-    canvas.draw_rect(
-        &Rect::from_xywh(
-            bound.pos.x + offset_left,
-            bound.pos.y,
-            input.cursor.width,
-            input.token_size.y,
-        ),
-        &paint,
-    );
 }
 fn pos_text(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, text: &Text) {
-    let col = match &text.style.style.color {
-        Origin::Id(id) => cache.sheet.colors.get(id).unwrap(),
-        Origin::Raw(color) => color,
+    let col = match cache.sheet.colors.get(&text.style.style.color) {
+        Some(c) => c,
+        None => cache.sheet.colors.get(&DEFAULT).unwrap(),
     };
     let paint = build_paint(col);
-    let f = match &text.style.font {
-        Origin::Raw(f) => f,
-        Origin::Id(id) => cache.sheet.fonts.get(id).unwrap(),
+    let f = match cache.sheet.fonts.get(&text.style.font) {
+        Some(f) => f,
+        None => cache.sheet.fonts.get(&DEFAULT).unwrap(),
     };
+
     let font = cache.font.load_asset(f).unwrap();
+
     let (_, met) = font.font.metrics();
     let pos_y = bound.pos.y + met.ascent.abs();
     if let Some(angle) = &bound.angle {
