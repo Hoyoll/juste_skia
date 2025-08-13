@@ -21,55 +21,55 @@ pub fn first_pass(element: &mut Element, cache: &mut Cache) {
             }
         },
     }
-    match &mut element.genus {
+    cache.inside_window(element, |e, ca| match &mut e.genus {
         Genus::Input(input) => {
-            calc_input(&mut element.bound, cache, input);
+            calc_input(&mut e.bound, ca, input);
         }
         Genus::Cult(b) => {
             b.children.as_mut().map(|c| {
                 c.iter_mut(|child| {
-                    silent_first_pass(child, cache);
+                    silent_first_pass(child, ca);
                 });
             });
-            calc_box(&mut element.bound, cache, b);
+            calc_box(&mut e.bound, ca, b);
         }
         Genus::Frame(b) | Genus::Float(b) => {
             b.children.as_mut().map(|c| {
                 c.iter_mut(|child| {
-                    first_pass(child, cache);
+                    first_pass(child, ca);
                 });
             });
-            calc_box(&mut element.bound, cache, b);
+            calc_box(&mut e.bound, ca, b);
         }
-        Genus::Text(text) => calc_text(&mut element.bound, cache, text),
-        Genus::Img(img) => calc_image(&mut element.bound, cache, img),
-    }
+        Genus::Text(text) => calc_text(&mut e.bound, ca, text),
+        Genus::Img(img) => calc_image(&mut e.bound, ca, img),
+    });
 }
 
 pub fn silent_first_pass(element: &mut Element, cache: &mut Cache) {
-    match &mut element.genus {
+    cache.inside_window(element, |e, ca| match &mut e.genus {
         Genus::Input(input) => {
-            calc_input(&mut element.bound, cache, input);
+            calc_input(&mut e.bound, ca, input);
         }
         Genus::Cult(b) => {
             b.children.as_mut().map(|c| {
                 c.iter_mut(|child| {
-                    silent_first_pass(child, cache);
+                    silent_first_pass(child, ca);
                 });
             });
-            calc_box(&mut element.bound, cache, b);
+            calc_box(&mut e.bound, ca, b);
         }
         Genus::Frame(b) | Genus::Float(b) => {
             b.children.as_mut().map(|c| {
                 c.iter_mut(|child| {
-                    silent_first_pass(child, cache);
+                    silent_first_pass(child, ca);
                 });
             });
-            calc_box(&mut element.bound, cache, b);
+            calc_box(&mut e.bound, ca, b);
         }
-        Genus::Text(text) => calc_text(&mut element.bound, cache, text),
-        Genus::Img(img) => calc_image(&mut element.bound, cache, img),
-    }
+        Genus::Text(text) => calc_text(&mut e.bound, ca, text),
+        Genus::Img(img) => calc_image(&mut e.bound, ca, img),
+    });
 }
 
 fn calc_box(bound: &mut Bound, cache: &mut Cache, b: &mut Frame) {
@@ -212,14 +212,12 @@ fn put_pad(bound: &mut Bound, pad: &Pad) {
 }
 
 pub fn second_pass(element: &mut Element, canvas: &Canvas, cache: &mut Cache) {
-    match &mut element.genus {
-        Genus::Img(img) => pos_img(&mut element.bound, canvas, cache, img),
-        Genus::Text(text) => pos_text(&mut element.bound, canvas, cache, text),
-        Genus::Input(input) => pos_input(&mut element.bound, canvas, cache, input),
-        Genus::Frame(b) | Genus::Cult(b) | Genus::Float(b) => {
-            pos_box(&mut element.bound, canvas, cache, b)
-        }
-    }
+    cache.inside_window(element, |e, c| match &mut e.genus {
+        Genus::Img(img) => pos_img(&mut e.bound, canvas, c, img),
+        Genus::Text(text) => pos_text(&mut e.bound, canvas, c, text),
+        Genus::Input(input) => pos_input(&mut e.bound, canvas, c, input),
+        Genus::Frame(b) | Genus::Cult(b) | Genus::Float(b) => pos_box(&mut e.bound, canvas, c, b),
+    });
 }
 
 fn pos_box(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, b: &mut Frame) {
@@ -246,8 +244,8 @@ fn pos_box(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, b: &mut Frame)
         if b.overflow.need_clip() {
             c.clip_path(&build_path(&rec, bound), ClipOp::Intersect, Some(true));
         }
-        let mut offset_x = bound.pos.x + bound.offset.x;
-        let mut offset_y = bound.pos.y + bound.offset.y;
+        let mut offset_x = bound.pos.x + b.child_offset.x;
+        let mut offset_y = bound.pos.y + b.child_offset.y;
 
         match b.gravity {
             Gravity::Horizontal => {
@@ -316,15 +314,13 @@ fn pos_input(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, input: &Inpu
         Some(c) => c,
         None => cache.sheet.colors.get(&DEFAULT).unwrap(),
     };
-
     let paint = build_paint(col);
-
     let f = match cache.sheet.fonts.get(&input.style.font) {
         Some(f) => f,
         None => cache.sheet.fonts.get(&DEFAULT).unwrap(),
     };
     let font = cache.font.load_asset(f).unwrap();
-    let mut offset = 0.0;
+    let mut offset = 0.0 + input.offset.x;
     match input.state {
         State::Hidden => {
             input.stream.left.iter().for_each(|token| match token {

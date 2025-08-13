@@ -19,7 +19,7 @@ use glutin::{
 use glutin_winit::{ApiPreference, DisplayBuilder};
 
 use juste::{
-    element::{Message, SignalBus},
+    element::{Element, Message, SignalBus},
     genus::Src,
     io::{From, Io, On, Win},
     style::{Font, Mode, Sheet},
@@ -300,6 +300,27 @@ pub struct Cache {
     pub font: Fonts,
     pub window: Window,
     pub gl_config: Config,
+}
+
+impl Cache {
+    pub fn inside_window<F>(&mut self, element: &mut Element, mut f: F)
+    where
+        F: FnMut(&mut Element, &mut Cache),
+    {
+        if element.bound.pos.x > self.io.window_size.x
+            || element.bound.pos.y > self.io.window_size.y
+        {
+            return;
+        }
+        if element.bound.pos.x + element.bound.dim.x < 0.0 {
+            return;
+        }
+
+        if element.bound.pos.y + element.bound.dim.y < 0.0 {
+            return;
+        }
+        f(element, self);
+    }
 }
 
 pub struct Renderer<T: App> {
