@@ -12,3 +12,4 @@ skia-safe = { version = "0.87.0", features = ["gl"] }
 winit = "0.30.11"
 juste = { path = "D:/project/rust/juste" }
 reqwest = { version = "0.12.22", features = ["blocking"] }
+libloading = "0.8.8"

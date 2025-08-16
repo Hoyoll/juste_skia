@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gl::{GetIntegerv, types};
+use gl::{GetIntegerv, GetnConvolutionFilter, types};
 use glutin::{
     config::{Config, ConfigTemplateBuilder},
     context::{ContextApi, ContextAttributesBuilder, PossiblyCurrentContext},
@@ -22,13 +22,13 @@ use juste::{
     element::{Element, Message, SignalBus},
     genus::Src,
     io::{From, Io, On, Win},
-    style::{Font, Mode, Sheet},
+    style::{Font, Mode},
     util::Vec2,
 };
 use raw_window_handle::HasWindowHandle;
 use reqwest::blocking;
 use skia_safe::{
-    Data, FontMgr, FontStyle, Image, TextBlob, Typeface,
+    Color, Data, FontMgr, FontStyle, Image, TextBlob, Typeface,
     gpu::{
         DirectContext, Protected, SurfaceOrigin, backend_render_targets,
         ganesh::gl::direct_contexts,
@@ -49,7 +49,7 @@ use crate::{
     io::{filter_keyboard, filter_mouse},
 };
 
-pub fn run<T: App>(app: T, attr: WindowAttributes, sheet: Sheet) {
+pub fn run<T: App>(app: T, attr: WindowAttributes) {
     let event_loop: EventLoop<Message> = EventLoop::with_user_event().build().unwrap();
 
     let (window, gl_config) = {
@@ -73,7 +73,6 @@ pub fn run<T: App>(app: T, attr: WindowAttributes, sheet: Sheet) {
             io,
             bus: SignalBus::new(),
             image: Images::new(),
-            sheet,
             proxy,
             font: Fonts::new(),
             window,
@@ -295,7 +294,6 @@ pub struct Cache {
     pub io: Io,
     pub bus: SignalBus,
     pub image: Images,
-    pub sheet: Sheet,
     pub proxy: EventLoopProxy<Message>,
     pub font: Fonts,
     pub window: Window,
@@ -333,12 +331,16 @@ impl<T: App> Renderer<T> {
     fn draw(&mut self) {
         match self.graphic.as_mut() {
             Some(graphic) => {
-                self.app.draw(&mut self.cache, graphic.sk_surface.canvas());
+                let canvas = graphic.sk_surface.canvas();
+                let col = Color::from_argb(255, 0, 0, 0);
+                canvas.clear(col);
+                self.app.draw(&mut self.cache, canvas);
                 graphic.gr_context.flush_and_submit();
                 graphic.gl_surface.swap_buffers(&graphic.context).unwrap();
                 while let Some(msg) = self.cache.bus.queue.pop() {
                     let _ = self.cache.proxy.send_event(msg);
                 }
+                self.cache.io.clean();
             }
             None => (),
         }

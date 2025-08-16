@@ -1,19 +1,25 @@
 use juste::{
-    element::{Bound, Element},
+    element::{Bound, Element, Listeners},
     genus::{Frame, Genus, Image, Input, State, Text, Token},
-    style::{Color, DEFAULT, Gravity, Pad, Size},
+    style::{Color, DEFAULT, Gravity, Pad, Sheet, Size},
 };
 use skia_safe::{Canvas, ClipOp, Matrix, Paint, Path, Rect};
 
 use crate::renderer::Cache;
 
-pub fn first_pass(element: &mut Element, cache: &mut Cache) {
+pub fn first_pass(
+    element: &mut Element,
+    cache: &mut Cache,
+    listener: &mut Listeners,
+    sheet: &mut Sheet,
+) {
     match &element.listener {
         None => (),
-        Some(id) => match cache.sheet.listener.get_mut(id) {
+        Some(id) => match listener.get_mut(id) {
             None => (),
             Some(list) => {
                 list.listen_io(element, &cache.io).map(|s| {
+                    // it crash here
                     let (idx, msg) = s;
                     cache.bus.insert(idx, msg);
                 });
@@ -23,59 +29,66 @@ pub fn first_pass(element: &mut Element, cache: &mut Cache) {
     }
     cache.inside_window(element, |e, ca| match &mut e.genus {
         Genus::Input(input) => {
-            calc_input(&mut e.bound, ca, input);
+            calc_input(&mut e.bound, input, sheet);
         }
         Genus::Cult(b) => {
             b.children.as_mut().map(|c| {
                 c.iter_mut(|child| {
-                    silent_first_pass(child, ca);
+                    silent_first_pass(child, ca, listener, sheet);
                 });
             });
-            calc_box(&mut e.bound, ca, b);
+            calc_box(&mut e.bound, ca, b, sheet);
         }
         Genus::Frame(b) | Genus::Float(b) => {
             b.children.as_mut().map(|c| {
                 c.iter_mut(|child| {
-                    first_pass(child, ca);
+                    first_pass(child, ca, listener, sheet);
                 });
             });
-            calc_box(&mut e.bound, ca, b);
+            calc_box(&mut e.bound, ca, b, sheet);
         }
-        Genus::Text(text) => calc_text(&mut e.bound, ca, text),
-        Genus::Img(img) => calc_image(&mut e.bound, ca, img),
+        Genus::Text(text) => calc_text(&mut e.bound, ca, text, sheet),
+        Genus::Img(img) => calc_image(&mut e.bound, ca, img, listener, sheet),
+        _ => (),
     });
 }
 
-pub fn silent_first_pass(element: &mut Element, cache: &mut Cache) {
+pub fn silent_first_pass(
+    element: &mut Element,
+    cache: &mut Cache,
+    listener: &mut Listeners,
+    sheet: &mut Sheet,
+) {
     cache.inside_window(element, |e, ca| match &mut e.genus {
         Genus::Input(input) => {
-            calc_input(&mut e.bound, ca, input);
+            calc_input(&mut e.bound, input, sheet);
         }
         Genus::Cult(b) => {
             b.children.as_mut().map(|c| {
                 c.iter_mut(|child| {
-                    silent_first_pass(child, ca);
+                    silent_first_pass(child, ca, listener, sheet);
                 });
             });
-            calc_box(&mut e.bound, ca, b);
+            calc_box(&mut e.bound, ca, b, sheet);
         }
         Genus::Frame(b) | Genus::Float(b) => {
             b.children.as_mut().map(|c| {
                 c.iter_mut(|child| {
-                    silent_first_pass(child, ca);
+                    silent_first_pass(child, ca, listener, sheet);
                 });
             });
-            calc_box(&mut e.bound, ca, b);
+            calc_box(&mut e.bound, ca, b, sheet);
         }
-        Genus::Text(text) => calc_text(&mut e.bound, ca, text),
-        Genus::Img(img) => calc_image(&mut e.bound, ca, img),
+        Genus::Text(text) => calc_text(&mut e.bound, ca, text, sheet),
+        Genus::Img(img) => calc_image(&mut e.bound, ca, img, listener, sheet),
+        _ => (),
     });
 }
 
-fn calc_box(bound: &mut Bound, cache: &mut Cache, b: &mut Frame) {
-    let pad = match cache.sheet.pads.get(&b.style.pad) {
+fn calc_box(bound: &mut Bound, cache: &mut Cache, b: &mut Frame, sheet: &mut Sheet) {
+    let pad = match sheet.pads.get(&b.style.pad) {
         Some(p) => p,
-        None => cache.sheet.pads.get(&DEFAULT).unwrap(),
+        None => sheet.pads.get(&DEFAULT).unwrap(),
     };
     put_pad(bound, pad);
     let width = b.size.x;
@@ -161,18 +174,24 @@ fn calc_box(bound: &mut Bound, cache: &mut Cache, b: &mut Frame) {
     }
 }
 
-fn calc_input(bound: &mut Bound, cache: &mut Cache, input: &Input) {
-    let pad = match cache.sheet.pads.get(&input.style.style.pad) {
+fn calc_input(bound: &mut Bound, input: &Input, sheet: &mut Sheet) {
+    let pad = match sheet.pads.get(&input.style.style.pad) {
         Some(p) => p,
-        None => cache.sheet.pads.get(&DEFAULT).unwrap(),
+        None => sheet.pads.get(&DEFAULT).unwrap(),
     };
     put_pad(bound, pad);
     bound.dim.y = input.token_size.y;
 }
-fn calc_image(bound: &mut Bound, cache: &mut Cache, img: &Image) {
-    let pad = match cache.sheet.pads.get(&img.style.pad) {
+fn calc_image(
+    bound: &mut Bound,
+    cache: &mut Cache,
+    img: &Image,
+    listener: &mut Listeners,
+    sheet: &mut Sheet,
+) {
+    let pad = match sheet.pads.get(&img.style.pad) {
         Some(p) => p,
-        None => cache.sheet.pads.get(&DEFAULT).unwrap(),
+        None => sheet.pads.get(&DEFAULT).unwrap(),
     };
     put_pad(bound, pad);
     match cache.image.load(&img.img_path) {
@@ -182,22 +201,22 @@ fn calc_image(bound: &mut Bound, cache: &mut Cache, img: &Image) {
         }
         None => {
             let mut fb_el = (img.fallback)(&cache.io);
-            silent_first_pass(&mut fb_el, cache);
+            silent_first_pass(&mut fb_el, cache, listener, sheet);
             bound.dim.x = fb_el.bound.dim.x;
             bound.dim.y = fb_el.bound.dim.y;
         }
     }
 }
 
-fn calc_text(bound: &mut Bound, cache: &mut Cache, text: &Text) {
-    let pad = match cache.sheet.pads.get(&text.style.style.pad) {
+fn calc_text(bound: &mut Bound, cache: &mut Cache, text: &Text, sheet: &mut Sheet) {
+    let pad = match sheet.pads.get(&text.style.style.pad) {
         Some(p) => p,
-        None => cache.sheet.pads.get(&DEFAULT).unwrap(),
+        None => sheet.pads.get(&DEFAULT).unwrap(),
     };
     put_pad(bound, pad);
-    let f = match cache.sheet.fonts.get(&text.style.font) {
+    let f = match sheet.fonts.get(&text.style.font) {
         Some(f) => f,
-        None => cache.sheet.fonts.get(&DEFAULT).unwrap(),
+        None => sheet.fonts.get(&DEFAULT).unwrap(),
     };
 
     cache.font.load_asset(f).map(|asset| {
@@ -211,20 +230,29 @@ fn put_pad(bound: &mut Bound, pad: &Pad) {
     bound.shadow = [pad.left, pad.right, pad.top, pad.low];
 }
 
-pub fn second_pass(element: &mut Element, canvas: &Canvas, cache: &mut Cache) {
+pub fn second_pass(element: &mut Element, canvas: &Canvas, cache: &mut Cache, sheet: &mut Sheet) {
     cache.inside_window(element, |e, c| match &mut e.genus {
-        Genus::Img(img) => pos_img(&mut e.bound, canvas, c, img),
-        Genus::Text(text) => pos_text(&mut e.bound, canvas, c, text),
-        Genus::Input(input) => pos_input(&mut e.bound, canvas, c, input),
-        Genus::Frame(b) | Genus::Cult(b) | Genus::Float(b) => pos_box(&mut e.bound, canvas, c, b),
+        Genus::Img(img) => pos_img(&mut e.bound, canvas, c, img, sheet),
+        Genus::Text(text) => pos_text(&mut e.bound, canvas, c, text, sheet),
+        Genus::Input(input) => pos_input(&mut e.bound, canvas, c, input, sheet),
+        Genus::Frame(b) | Genus::Cult(b) | Genus::Float(b) => {
+            pos_box(&mut e.bound, canvas, c, b, sheet)
+        }
+        _ => (),
     });
 }
 
-fn pos_box(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, b: &mut Frame) {
+fn pos_box(
+    bound: &mut Bound,
+    canvas: &Canvas,
+    cache: &mut Cache,
+    b: &mut Frame,
+    sheet: &mut Sheet,
+) {
     let rec = Rect::from_xywh(bound.pos.x, bound.pos.y, bound.dim.x, bound.dim.y);
-    let col = match cache.sheet.colors.get(&b.style.color) {
+    let col = match sheet.colors.get(&b.style.color) {
         Some(c) => c,
-        None => cache.sheet.colors.get(&DEFAULT).unwrap(),
+        None => sheet.colors.get(&DEFAULT).unwrap(),
     };
     if let Some(angle) = &bound.angle {
         scope(canvas, |c| {
@@ -257,7 +285,7 @@ fn pos_box(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, b: &mut Frame)
                             bound.pos.y = offset_y + bound.shadow[2];
                             offset_x += bound.dim.x + bound.shadow[1];
                         });
-                        second_pass(child, canvas, cache);
+                        second_pass(child, canvas, cache, sheet);
                     })
                 });
             }
@@ -270,21 +298,21 @@ fn pos_box(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, b: &mut Frame)
                             bound.pos.y = offset_y;
                             offset_y += bound.dim.y + bound.shadow[3];
                         });
-                        second_pass(child, canvas, cache);
+                        second_pass(child, canvas, cache, sheet);
                     })
                 });
             }
         };
     });
 }
-fn pos_img(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, img: &Image) {
+fn pos_img(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, img: &Image, sheet: &mut Sheet) {
     match cache.image.load(&img.img_path) {
         Some(image) => {
             let rec = Rect::from_xywh(bound.pos.x, bound.pos.y, bound.dim.x, bound.dim.y);
 
-            let col = match cache.sheet.colors.get(&img.style.color) {
+            let col = match sheet.colors.get(&img.style.color) {
                 Some(c) => c,
-                None => cache.sheet.colors.get(&DEFAULT).unwrap(),
+                None => sheet.colors.get(&DEFAULT).unwrap(),
             };
 
             let paint = build_paint(col);
@@ -305,19 +333,25 @@ fn pos_img(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, img: &Image) {
         None => {
             let mut fb_el = (img.fallback)(&cache.io);
             fb_el.bound = *bound;
-            second_pass(&mut fb_el, canvas, cache);
+            second_pass(&mut fb_el, canvas, cache, sheet);
         }
     }
 }
-fn pos_input(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, input: &Input) {
-    let col = match cache.sheet.colors.get(&input.style.style.color) {
+fn pos_input(
+    bound: &mut Bound,
+    canvas: &Canvas,
+    cache: &mut Cache,
+    input: &Input,
+    sheet: &mut Sheet,
+) {
+    let col = match sheet.colors.get(&input.style.style.color) {
         Some(c) => c,
-        None => cache.sheet.colors.get(&DEFAULT).unwrap(),
+        None => sheet.colors.get(&DEFAULT).unwrap(),
     };
     let paint = build_paint(col);
-    let f = match cache.sheet.fonts.get(&input.style.font) {
+    let f = match sheet.fonts.get(&input.style.font) {
         Some(f) => f,
-        None => cache.sheet.fonts.get(&DEFAULT).unwrap(),
+        None => sheet.fonts.get(&DEFAULT).unwrap(),
     };
     let font = cache.font.load_asset(f).unwrap();
     let mut offset = 0.0 + input.offset.x;
@@ -422,9 +456,9 @@ fn pos_input(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, input: &Inpu
                 }
                 _ => (),
             });
-            let c_col = match cache.sheet.colors.get(&input.cursor.color) {
+            let c_col = match sheet.colors.get(&input.cursor.color) {
                 Some(c) => c,
-                None => cache.sheet.colors.get(&DEFAULT).unwrap(),
+                None => sheet.colors.get(&DEFAULT).unwrap(),
             };
             let p = build_paint(c_col);
             canvas.draw_rect(
@@ -467,15 +501,15 @@ fn pos_input(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, input: &Inpu
         }
     }
 }
-fn pos_text(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, text: &Text) {
-    let col = match cache.sheet.colors.get(&text.style.style.color) {
+fn pos_text(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, text: &Text, sheet: &mut Sheet) {
+    let col = match sheet.colors.get(&text.style.style.color) {
         Some(c) => c,
-        None => cache.sheet.colors.get(&DEFAULT).unwrap(),
+        None => sheet.colors.get(&DEFAULT).unwrap(),
     };
     let paint = build_paint(col);
-    let f = match cache.sheet.fonts.get(&text.style.font) {
+    let f = match sheet.fonts.get(&text.style.font) {
         Some(f) => f,
-        None => cache.sheet.fonts.get(&DEFAULT).unwrap(),
+        None => sheet.fonts.get(&DEFAULT).unwrap(),
     };
 
     let font = cache.font.load_asset(f).unwrap();
