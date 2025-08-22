@@ -17,14 +17,7 @@ pub fn first_pass(
         None => (),
         Some(id) => match listener.get_mut(id) {
             None => (),
-            Some(list) => {
-                list.listen_io(element, &cache.io).map(|s| {
-                    // it crash here
-                    let (idx, msg) = s;
-                    cache.bus.insert(idx, msg);
-                });
-                list.listen_bus(element, &mut cache.bus);
-            }
+            Some(list) => list.listen_io(element, &mut cache.io),
         },
     }
     cache.inside_window(element, |e, ca| match &mut e.genus {

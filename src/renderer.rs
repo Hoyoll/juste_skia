@@ -71,7 +71,6 @@ pub fn run<T: App>(app: T, attr: WindowAttributes) {
         graphic: None,
         cache: Cache {
             io,
-            bus: SignalBus::new(),
             image: Images::new(),
             proxy,
             font: Fonts::new(),
@@ -292,7 +291,7 @@ fn font_style(mode: &Mode) -> FontStyle {
 
 pub struct Cache {
     pub io: Io,
-    pub bus: SignalBus,
+    // pub bus: SignalBus,
     pub image: Images,
     pub proxy: EventLoopProxy<Message>,
     pub font: Fonts,
@@ -337,7 +336,7 @@ impl<T: App> Renderer<T> {
                 self.app.draw(&mut self.cache, canvas);
                 graphic.gr_context.flush_and_submit();
                 graphic.gl_surface.swap_buffers(&graphic.context).unwrap();
-                while let Some(msg) = self.cache.bus.queue.pop() {
+                while let Some(msg) = self.cache.io.bus.queue.pop() {
                     let _ = self.cache.proxy.send_event(msg);
                 }
                 self.cache.io.clean();
