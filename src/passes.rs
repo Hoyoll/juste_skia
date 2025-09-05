@@ -1,11 +1,12 @@
 use juste::{
     element::{Bound, Element, Listeners},
-    genus::{Frame, Genus, Image, Input, State, Text, Token},
-    style::{Color, DEFAULT, Gravity, Pad, Sheet, Size},
+    genus::{Ctx, CursorState, Dirt, Edit, Frame, Genus, Image, Text},
+    style::{ColorId, DEFAULT, Gravity, Pad, Sheet, Size},
+    util::Dir,
 };
 use skia_safe::{Canvas, ClipOp, Matrix, Paint, Path, Rect};
 
-use crate::renderer::Cache;
+use crate::renderer::{Cache, FontAsset};
 
 pub fn first_pass(
     element: &mut Element,
@@ -167,14 +168,15 @@ fn calc_box(bound: &mut Bound, cache: &mut Cache, b: &mut Frame, sheet: &mut She
     }
 }
 
-fn calc_input(bound: &mut Bound, input: &Input, sheet: &mut Sheet) {
-    let pad = match sheet.pads.get(&input.style.style.pad) {
+fn calc_input(bound: &mut Bound, input: &Edit, sheet: &mut Sheet) {
+    let pad = match sheet.pads.get(&input.pad) {
         Some(p) => p,
         None => sheet.pads.get(&DEFAULT).unwrap(),
     };
     put_pad(bound, pad);
-    bound.dim.y = input.token_size.y;
+    bound.dim = input.frame_size;
 }
+
 fn calc_image(
     bound: &mut Bound,
     cache: &mut Cache,
@@ -247,20 +249,28 @@ fn pos_box(
         Some(c) => c,
         None => sheet.colors.get(&DEFAULT).unwrap(),
     };
-    if let Some(angle) = &bound.angle {
-        scope(canvas, |c| {
-            let pivot = skia_safe::Point::new(
-                bound.pos.x + (bound.dim.x / 2.0),
-                bound.pos.y + (bound.dim.y / 2.0),
+    match &bound.angle {
+        Some(angle) => {
+            scope(canvas, |c| {
+                let pivot = skia_safe::Point::new(
+                    bound.pos.x + (bound.dim.x / 2.0),
+                    bound.pos.y + (bound.dim.y / 2.0),
+                );
+                let matrix = Matrix::rotate_deg_pivot(*angle, pivot);
+                c.concat(&matrix);
+                c.draw_rect(
+                    rec,
+                    &cache.reusable_paint.set_argb(col.a, col.r, col.g, col.b),
+                );
+            });
+        }
+        None => {
+            canvas.draw_rect(
+                rec,
+                &cache.reusable_paint.set_argb(col.a, col.r, col.g, col.b),
             );
-            let matrix = Matrix::rotate_deg_pivot(*angle, pivot);
-            c.concat(&matrix);
-            c.draw_rect(rec, &build_paint(col));
-        });
-    } else {
-        canvas.draw_rect(rec, &build_paint(col));
+        }
     }
-
     scope(canvas, |c| {
         if b.overflow.need_clip() {
             c.clip_path(&build_path(&rec, bound), ClipOp::Intersect, Some(true));
@@ -302,25 +312,35 @@ fn pos_img(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, img: &Image, s
     match cache.image.load(&img.img_path) {
         Some(image) => {
             let rec = Rect::from_xywh(bound.pos.x, bound.pos.y, bound.dim.x, bound.dim.y);
-
             let col = match sheet.colors.get(&img.style.color) {
                 Some(c) => c,
                 None => sheet.colors.get(&DEFAULT).unwrap(),
             };
-
-            let paint = build_paint(col);
-            if let Some(angle) = &bound.angle {
-                scope(canvas, |c| {
-                    let pivot = skia_safe::Point::new(
-                        bound.pos.x + (bound.dim.x / 2.0),
-                        bound.pos.y + (bound.dim.y / 2.0),
+            match &bound.angle {
+                Some(angle) => {
+                    scope(canvas, |c| {
+                        let pivot = skia_safe::Point::new(
+                            bound.pos.x + (bound.dim.x / 2.0),
+                            bound.pos.y + (bound.dim.y / 2.0),
+                        );
+                        let matrix = Matrix::rotate_deg_pivot(*angle, pivot);
+                        c.concat(&matrix);
+                        c.draw_image_rect(
+                            image,
+                            None,
+                            rec,
+                            &cache.reusable_paint.set_argb(col.a, col.r, col.g, col.b),
+                        );
+                    });
+                }
+                None => {
+                    canvas.draw_image_rect(
+                        image,
+                        None,
+                        rec,
+                        &cache.reusable_paint.set_argb(col.a, col.r, col.g, col.b),
                     );
-                    let matrix = Matrix::rotate_deg_pivot(*angle, pivot);
-                    c.concat(&matrix);
-                    c.draw_image_rect(image, None, rec, &paint);
-                });
-            } else {
-                canvas.draw_image_rect(image, None, rec, &paint);
+                }
             }
         }
         None => {
@@ -334,172 +354,544 @@ fn pos_input(
     bound: &mut Bound,
     canvas: &Canvas,
     cache: &mut Cache,
-    input: &Input,
+    edit: &mut Edit,
     sheet: &mut Sheet,
 ) {
-    let col = match sheet.colors.get(&input.style.style.color) {
-        Some(c) => c,
-        None => sheet.colors.get(&DEFAULT).unwrap(),
-    };
-    let paint = build_paint(col);
-    let f = match sheet.fonts.get(&input.style.font) {
+    highlight(edit);
+
+    let f = match sheet.fonts.get(&edit.font) {
         Some(f) => f,
         None => sheet.fonts.get(&DEFAULT).unwrap(),
     };
+
     let font = cache.font.load_asset(f).unwrap();
-    let mut offset = 0.0 + input.offset.x;
-    match input.state {
-        State::Hidden => {
-            input.stream.left.iter().for_each(|token| match token {
-                Token::Space => offset += input.token_size.x,
-                Token::Char(chars) => {
-                    chars.left.iter().for_each(|c| match font.get_char(c) {
-                        Some(c) => {
-                            canvas.draw_text_blob(c, (bound.pos.x + offset, bound.pos.y), &paint);
-                            offset += input.token_size.x;
+
+    let mut line_pos = bound.pos + edit.offset;
+    let mut prev_line_idx = Dir::<usize>::Left(0);
+    let mut cursor_pos = line_pos.x;
+    let mut prev_line = line_pos.y;
+    let mut prev_cursor = cursor_pos;
+    let mut prev = &Ctx::Gap;
+    scope(canvas, |c| {
+        let rec = Rect::from_xywh(bound.pos.x, bound.pos.y, bound.dim.x, bound.dim.y);
+        c.clip_path(&build_path(&rec, bound), ClipOp::Intersect, Some(true));
+        for (i, line) in edit.buffer.left.iter().enumerate() {
+            match bound.inside_y(&line_pos) {
+                false => match line.ctx_buffer.last() {
+                    None => prev = &Ctx::Gap,
+                    Some(ctx) => prev = ctx,
+                },
+                true => {
+                    match line.cursor_state {
+                        CursorState::Display { char_idx } => {
+                            let col = match sheet.colors.get(&edit.cursor.col) {
+                                Some(c) => c,
+                                None => sheet.colors.get(&DEFAULT).unwrap(),
+                            };
+                            let cursor_pos_x = line_pos.x + (char_idx as f32 * edit.char_size.x);
+                            c.draw_rect(
+                                Rect::from_xywh(
+                                    cursor_pos_x,
+                                    line_pos.y,
+                                    edit.cursor.width,
+                                    edit.char_size.y,
+                                ),
+                                &cache.reusable_paint.set_argb(col.a, col.r, col.g, col.b),
+                            );
                         }
-                        None => {
-                            offset += input.token_size.x;
+                        CursorState::Span { start_idx, length } => {
+                            let cursor_pos_x = line_pos.x + (start_idx as f32 * edit.char_size.x);
+                            let col = match sheet.colors.get(&edit.cursor.col) {
+                                Some(c) => c,
+                                None => sheet.colors.get(&DEFAULT).unwrap(),
+                            };
+                            c.draw_rect(
+                                Rect::from_xywh(
+                                    cursor_pos_x,
+                                    line_pos.y,
+                                    edit.cursor.width * length as f32,
+                                    edit.char_size.y,
+                                ),
+                                &cache.reusable_paint.set_argb(col.a, col.r, col.g, col.b),
+                            );
                         }
-                    });
-                    chars
-                        .right
-                        .iter()
-                        .rev()
-                        .for_each(|c| match font.get_char(c) {
-                            Some(c) => {
-                                canvas.draw_text_blob(
-                                    c,
-                                    (bound.pos.x + offset, bound.pos.y),
-                                    &paint,
-                                );
-                                offset += input.token_size.x;
-                            }
-                            None => {
-                                offset += input.token_size.x;
-                            }
-                        });
-                }
-                _ => (),
-            });
-            input
-                .stream
-                .right
-                .iter()
-                .rev()
-                .for_each(|token| match token {
-                    Token::Space => offset += input.token_size.x,
-                    Token::Char(chars) => {
-                        chars
-                            .right
-                            .iter()
-                            .rev()
-                            .for_each(|c| match font.get_char(c) {
-                                Some(c) => {
-                                    canvas.draw_text_blob(
-                                        c,
-                                        (bound.pos.x + offset, bound.pos.y),
-                                        &paint,
-                                    );
-                                    offset += input.token_size.x;
-                                }
-                                None => {
-                                    offset += input.token_size.x;
-                                }
-                            });
+                        CursorState::Hidden => (),
                     }
-                    _ => (),
-                });
-        }
-        _ => {
-            let mut offset_left = offset;
-            input.stream.left.iter().for_each(|token| match token {
-                Token::Space => {
-                    offset += input.token_size.x;
-                    offset_left = offset;
-                }
-                Token::Char(chars) => {
-                    chars.left.iter().for_each(|c| match font.get_char(c) {
-                        Some(c) => {
-                            canvas.draw_text_blob(c, (bound.pos.x + offset, bound.pos.y), &paint);
-                            offset += input.token_size.x;
-                        }
-                        None => {
-                            offset += input.token_size.x;
-                        }
-                    });
-                    offset_left = offset;
-                    chars
-                        .right
-                        .iter()
-                        .rev()
-                        .for_each(|c| match font.get_char(c) {
-                            Some(c) => {
-                                canvas.draw_text_blob(
-                                    c,
-                                    (bound.pos.x + offset, bound.pos.y),
-                                    &paint,
-                                );
-                                offset += input.token_size.x;
-                            }
-                            None => {
-                                offset += input.token_size.x;
-                            }
-                        });
-                }
-                _ => (),
-            });
-            let c_col = match sheet.colors.get(&input.cursor.color) {
-                Some(c) => c,
-                None => sheet.colors.get(&DEFAULT).unwrap(),
-            };
-            let p = build_paint(c_col);
-            canvas.draw_rect(
-                &Rect::from_xywh(
-                    bound.pos.x + offset_left,
-                    bound.pos.y,
-                    input.cursor.width,
-                    input.token_size.y,
-                ),
-                &p,
-            );
-            input
-                .stream
-                .right
-                .iter()
-                .rev()
-                .for_each(|token| match token {
-                    Token::Space => offset += input.token_size.x,
-                    Token::Char(chars) => {
-                        chars
-                            .right
-                            .iter()
-                            .rev()
-                            .for_each(|c| match font.get_char(c) {
-                                Some(c) => {
-                                    canvas.draw_text_blob(
+                    line.ctx_buffer.iter().for_each(|ctx| match ctx {
+                        Ctx::Put { idx, col } => {
+                            match prev {
+                                Ctx::Hold { idx } => {
+                                    let buff = match prev_line_idx {
+                                        Dir::Left(l) => &edit.buffer.left[l],
+                                        Dir::Right(l) => &edit.buffer.right[l],
+                                    };
+                                    let buffer = &buff.buffer[idx[0]..idx[1]];
+                                    draw(
                                         c,
-                                        (bound.pos.x + offset, bound.pos.y),
-                                        &paint,
+                                        &font,
+                                        sheet,
+                                        buffer,
+                                        prev_cursor,
+                                        prev_line,
+                                        &DEFAULT,
+                                        &mut cache.reusable_paint,
                                     );
-                                    offset += input.token_size.x;
+                                    prev = &Ctx::Gap;
                                 }
-                                None => {
-                                    offset += input.token_size.x;
+                                _ => prev = &Ctx::Gap,
+                            }
+                            let buffer = &line.buffer[idx[0]..idx[1]];
+                            draw(
+                                c,
+                                &font,
+                                sheet,
+                                buffer,
+                                cursor_pos,
+                                line_pos.y,
+                                col,
+                                &mut cache.reusable_paint,
+                            );
+                            cursor_pos += buffer.len() as f32;
+                        }
+                        Ctx::Hold { idx } => match prev {
+                            Ctx::Hold { idx } => {
+                                let buff = match prev_line_idx {
+                                    Dir::Left(l) => &edit.buffer.left[l],
+                                    Dir::Right(l) => &edit.buffer.right[l],
+                                };
+                                let buffer = &buff.buffer[idx[0]..idx[1]];
+                                draw(
+                                    canvas,
+                                    &font,
+                                    sheet,
+                                    buffer,
+                                    prev_cursor,
+                                    prev_line,
+                                    &DEFAULT,
+                                    &mut cache.reusable_paint,
+                                );
+                                prev = ctx;
+                                prev_cursor = cursor_pos;
+                                prev_line = line_pos.y;
+                                prev_line_idx = Dir::Left(i);
+                                cursor_pos = edit.char_size.x * (idx[1] - idx[0]) as f32;
+                            }
+                            Ctx::Future {
+                                idx,
+                                col_self: _,
+                                col_next,
+                            } => {
+                                let buffer = &line.buffer[idx[0]..idx[1]];
+                                draw(
+                                    c,
+                                    &font,
+                                    sheet,
+                                    buffer,
+                                    prev_cursor,
+                                    prev_line,
+                                    col_next,
+                                    &mut cache.reusable_paint,
+                                );
+                                prev = &Ctx::Gap;
+                            }
+                            _ => {
+                                prev = ctx;
+                                prev_line = line_pos.y;
+                                prev_cursor = cursor_pos;
+                                prev_line_idx = Dir::Left(i);
+                                cursor_pos = edit.char_size.x * (idx[1] - idx[0]) as f32;
+                            }
+                        },
+                        Ctx::Pull {
+                            idx,
+                            col_self,
+                            col_prev,
+                        } => {
+                            match prev {
+                                Ctx::Hold { idx } => {
+                                    let buff = match prev_line_idx {
+                                        Dir::Left(l) => &edit.buffer.left[l],
+                                        Dir::Right(l) => &edit.buffer.right[l],
+                                    };
+                                    let buffer = &buff.buffer[idx[0]..idx[1]];
+                                    draw(
+                                        c,
+                                        &font,
+                                        sheet,
+                                        buffer,
+                                        prev_cursor,
+                                        prev_line,
+                                        col_prev,
+                                        &mut cache.reusable_paint,
+                                    );
                                 }
-                            });
-                    }
-                    _ => (),
-                });
+                                _ => (),
+                            }
+                            let buffer = &line.buffer[idx[0]..idx[1]];
+                            draw(
+                                c,
+                                &font,
+                                sheet,
+                                buffer,
+                                cursor_pos,
+                                line_pos.y,
+                                col_self,
+                                &mut cache.reusable_paint,
+                            );
+                            prev = &Ctx::Gap;
+                            cursor_pos += buffer.len() as f32;
+                        }
+                        Ctx::Future {
+                            idx,
+                            col_self,
+                            col_next: _,
+                        } => {
+                            match prev {
+                                Ctx::Hold { idx } => {
+                                    let buff = match prev_line_idx {
+                                        Dir::Left(l) => &edit.buffer.left[l],
+                                        Dir::Right(l) => &edit.buffer.right[l],
+                                    };
+                                    let buffer = &buff.buffer[idx[0]..idx[1]];
+                                    draw(
+                                        c,
+                                        &font,
+                                        sheet,
+                                        buffer,
+                                        prev_cursor,
+                                        prev_line,
+                                        &DEFAULT,
+                                        &mut cache.reusable_paint,
+                                    );
+                                }
+                                Ctx::Future {
+                                    idx,
+                                    col_self: _,
+                                    col_next,
+                                } => {
+                                    let buffer = &line.buffer[idx[0]..idx[1]];
+                                    draw(
+                                        c,
+                                        &font,
+                                        sheet,
+                                        buffer,
+                                        cursor_pos,
+                                        line_pos.y,
+                                        col_next,
+                                        &mut cache.reusable_paint,
+                                    );
+                                    cursor_pos += buffer.len() as f32;
+                                }
+                                _ => {
+                                    let buffer = &line.buffer[idx[0]..idx[1]];
+                                    draw(
+                                        c,
+                                        &font,
+                                        sheet,
+                                        buffer,
+                                        cursor_pos,
+                                        line_pos.y,
+                                        col_self,
+                                        &mut cache.reusable_paint,
+                                    );
+                                    cursor_pos += buffer.len() as f32;
+                                }
+                            }
+                            prev = ctx;
+                        }
+                        Ctx::Gap => cursor_pos += edit.char_size.x,
+                    });
+                }
+            }
+            line_pos.y += edit.char_size.y;
+            cursor_pos = line_pos.x;
         }
+
+        for (i, line) in edit.buffer.right.iter().rev().enumerate() {
+            match bound.inside_y(&line_pos) {
+                false => break,
+                true => {
+                    match line.cursor_state {
+                        CursorState::Display { char_idx } => {
+                            let col = match sheet.colors.get(&edit.cursor.col) {
+                                Some(c) => c,
+                                None => sheet.colors.get(&DEFAULT).unwrap(),
+                            };
+                            let cursor_pos_x = line_pos.x + (char_idx as f32 * edit.char_size.x);
+                            c.draw_rect(
+                                Rect::from_xywh(
+                                    cursor_pos_x,
+                                    line_pos.y,
+                                    edit.cursor.width,
+                                    edit.char_size.y,
+                                ),
+                                &cache.reusable_paint.set_argb(col.a, col.r, col.g, col.b),
+                            );
+                        }
+                        CursorState::Span { start_idx, length } => {
+                            let cursor_pos_x = line_pos.x + (start_idx as f32 * edit.char_size.x);
+                            let col = match sheet.colors.get(&edit.cursor.col) {
+                                Some(c) => c,
+                                None => sheet.colors.get(&DEFAULT).unwrap(),
+                            };
+                            c.draw_rect(
+                                Rect::from_xywh(
+                                    cursor_pos_x,
+                                    line_pos.y,
+                                    edit.cursor.width * length as f32,
+                                    edit.char_size.y,
+                                ),
+                                &cache.reusable_paint.set_argb(col.a, col.r, col.g, col.b),
+                            );
+                        }
+                        CursorState::Hidden => (),
+                    }
+                    line.ctx_buffer.iter().for_each(|ctx| match ctx {
+                        Ctx::Put { idx, col } => {
+                            match prev {
+                                Ctx::Hold { idx } => {
+                                    let buff = match prev_line_idx {
+                                        Dir::Left(l) => &edit.buffer.left[l],
+                                        Dir::Right(l) => &edit.buffer.right[l],
+                                    };
+                                    let buffer = &buff.buffer[idx[0]..idx[1]];
+                                    draw(
+                                        c,
+                                        &font,
+                                        sheet,
+                                        buffer,
+                                        prev_cursor,
+                                        prev_line,
+                                        &DEFAULT,
+                                        &mut cache.reusable_paint,
+                                    );
+                                    prev = &Ctx::Gap;
+                                }
+                                _ => prev = &Ctx::Gap,
+                            }
+                            let buffer = &line.buffer[idx[0]..idx[1]];
+                            draw(
+                                c,
+                                &font,
+                                sheet,
+                                buffer,
+                                cursor_pos,
+                                line_pos.y,
+                                col,
+                                &mut cache.reusable_paint,
+                            );
+                            cursor_pos += buffer.len() as f32;
+                        }
+                        Ctx::Hold { idx } => match prev {
+                            Ctx::Hold { idx } => {
+                                let buff = match prev_line_idx {
+                                    Dir::Left(l) => &edit.buffer.left[l],
+                                    Dir::Right(l) => &edit.buffer.right[l],
+                                };
+                                let buffer = &buff.buffer[idx[0]..idx[1]];
+                                draw(
+                                    canvas,
+                                    &font,
+                                    sheet,
+                                    buffer,
+                                    prev_cursor,
+                                    prev_line,
+                                    &DEFAULT,
+                                    &mut cache.reusable_paint,
+                                );
+                                prev = ctx;
+                                prev_cursor = cursor_pos;
+                                prev_line = line_pos.y;
+                                prev_line_idx = Dir::Left(i);
+                                cursor_pos = edit.char_size.x * (idx[1] - idx[0]) as f32;
+                            }
+                            Ctx::Future {
+                                idx,
+                                col_self: _,
+                                col_next,
+                            } => {
+                                let buffer = &line.buffer[idx[0]..idx[1]];
+                                draw(
+                                    c,
+                                    &font,
+                                    sheet,
+                                    buffer,
+                                    prev_cursor,
+                                    prev_line,
+                                    col_next,
+                                    &mut cache.reusable_paint,
+                                );
+                                prev = &Ctx::Gap;
+                            }
+                            _ => {
+                                prev = ctx;
+                                prev_line = line_pos.y;
+                                prev_cursor = cursor_pos;
+                                prev_line_idx = Dir::Left(i);
+                                cursor_pos = edit.char_size.x * (idx[1] - idx[0]) as f32;
+                            }
+                        },
+                        Ctx::Pull {
+                            idx,
+                            col_self,
+                            col_prev,
+                        } => {
+                            match prev {
+                                Ctx::Hold { idx } => {
+                                    let buff = match prev_line_idx {
+                                        Dir::Left(l) => &edit.buffer.left[l],
+                                        Dir::Right(l) => &edit.buffer.right[l],
+                                    };
+                                    let buffer = &buff.buffer[idx[0]..idx[1]];
+                                    draw(
+                                        c,
+                                        &font,
+                                        sheet,
+                                        buffer,
+                                        prev_cursor,
+                                        prev_line,
+                                        col_prev,
+                                        &mut cache.reusable_paint,
+                                    );
+                                }
+                                _ => (),
+                            }
+                            let buffer = &line.buffer[idx[0]..idx[1]];
+                            draw(
+                                c,
+                                &font,
+                                sheet,
+                                buffer,
+                                cursor_pos,
+                                line_pos.y,
+                                col_self,
+                                &mut cache.reusable_paint,
+                            );
+                            prev = &Ctx::Gap;
+                            cursor_pos += buffer.len() as f32;
+                        }
+                        Ctx::Future {
+                            idx,
+                            col_self,
+                            col_next: _,
+                        } => {
+                            match prev {
+                                Ctx::Hold { idx } => {
+                                    let buff = match prev_line_idx {
+                                        Dir::Left(l) => &edit.buffer.left[l],
+                                        Dir::Right(l) => &edit.buffer.right[l],
+                                    };
+                                    let buffer = &buff.buffer[idx[0]..idx[1]];
+                                    draw(
+                                        c,
+                                        &font,
+                                        sheet,
+                                        buffer,
+                                        prev_cursor,
+                                        prev_line,
+                                        &DEFAULT,
+                                        &mut cache.reusable_paint,
+                                    );
+                                }
+                                Ctx::Future {
+                                    idx,
+                                    col_self: _,
+                                    col_next,
+                                } => {
+                                    let buffer = &line.buffer[idx[0]..idx[1]];
+                                    draw(
+                                        c,
+                                        &font,
+                                        sheet,
+                                        buffer,
+                                        cursor_pos,
+                                        line_pos.y,
+                                        col_next,
+                                        &mut cache.reusable_paint,
+                                    );
+                                    cursor_pos += buffer.len() as f32;
+                                }
+                                _ => {
+                                    let buffer = &line.buffer[idx[0]..idx[1]];
+                                    draw(
+                                        c,
+                                        &font,
+                                        sheet,
+                                        buffer,
+                                        cursor_pos,
+                                        line_pos.y,
+                                        col_self,
+                                        &mut cache.reusable_paint,
+                                    );
+                                    cursor_pos += buffer.len() as f32;
+                                }
+                            }
+                            prev = ctx;
+                        }
+                        Ctx::Gap => cursor_pos += edit.char_size.x,
+                    });
+                }
+            }
+            line_pos.y += edit.char_size.y;
+            cursor_pos = line_pos.x;
+        }
+    });
+}
+
+fn draw(
+    canvas: &Canvas,
+    font: &FontAsset,
+    sheet: &mut Sheet,
+    buffer: &[u8],
+    x: f32,
+    y: f32,
+    col: &ColorId,
+    reusable_paint: &mut Paint,
+) {
+    let col = match sheet.colors.get(col) {
+        Some(c) => c,
+        None => sheet.colors.get(&DEFAULT).unwrap(),
+    };
+    canvas.draw_str(
+        u8_to_str(buffer),
+        (x, y),
+        &font.font,
+        reusable_paint.set_argb(col.a, col.r, col.g, col.b),
+    );
+}
+
+fn u8_to_str(u8: &[u8]) -> &str {
+    unsafe { str::from_utf8_unchecked(u8) }
+}
+fn highlight(edit: &mut Edit) {
+    match edit.highlight.dirt {
+        Dirt::On(i) => {
+            let buffer = &mut edit.buffer.left[i];
+            buffer.ctx_buffer.clear();
+            edit.highlight.highlight(buffer);
+        }
+        Dirt::Range(slice) => {
+            let m = &mut edit.buffer.left[slice.start..slice.end];
+            for line in m.iter_mut() {
+                line.ctx_buffer.clear();
+                edit.highlight.highlight(line);
+            }
+        }
+        Dirt::All => {
+            edit.buffer.iter_mut(|line| {
+                edit.highlight.highlight(line);
+            });
+        }
+        Dirt::None => (),
     }
 }
+
 fn pos_text(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, text: &Text, sheet: &mut Sheet) {
     let col = match sheet.colors.get(&text.style.style.color) {
         Some(c) => c,
         None => sheet.colors.get(&DEFAULT).unwrap(),
     };
-    let paint = build_paint(col);
+
     let f = match sheet.fonts.get(&text.style.font) {
         Some(f) => f,
         None => sheet.fonts.get(&DEFAULT).unwrap(),
@@ -517,10 +909,20 @@ fn pos_text(bound: &mut Bound, canvas: &Canvas, cache: &mut Cache, text: &Text, 
             );
             let matrix = Matrix::rotate_deg_pivot(*angle, pivot);
             c.concat(&matrix);
-            c.draw_str(&*text.text, (bound.pos.x, pos_y), &font.font, &paint);
+            c.draw_str(
+                &*text.text,
+                (bound.pos.x, pos_y),
+                &font.font,
+                &cache.reusable_paint.set_argb(col.a, col.r, col.g, col.b),
+            );
         });
     } else {
-        canvas.draw_str(&*text.text, (bound.pos.x, pos_y), &font.font, &paint);
+        canvas.draw_str(
+            &*text.text,
+            (bound.pos.x, pos_y),
+            &font.font,
+            &cache.reusable_paint.set_argb(col.a, col.r, col.g, col.b),
+        );
     }
 }
 fn build_path(rec: &Rect, bound: &mut Bound) -> Path {
@@ -535,13 +937,6 @@ fn build_path(rec: &Rect, bound: &mut Bound) -> Path {
         .pre_translate((-cx, -cy));
     path.transform(&matrix);
     path
-}
-
-fn build_paint(color: &Color) -> Paint {
-    let mut paint = Paint::default();
-    paint.set_anti_alias(true);
-    paint.set_argb(color.a, color.r, color.g, color.b);
-    paint
 }
 
 fn scope<T>(canvas: &Canvas, mut fun: T)

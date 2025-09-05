@@ -28,7 +28,7 @@ use juste::{
 use raw_window_handle::HasWindowHandle;
 use reqwest::blocking;
 use skia_safe::{
-    Color, Data, FontMgr, FontStyle, Image, TextBlob, Typeface,
+    Color, Data, FontMgr, FontStyle, Image, Paint, TextBlob, Typeface,
     gpu::{
         DirectContext, Protected, SurfaceOrigin, backend_render_targets,
         ganesh::gl::direct_contexts,
@@ -66,11 +66,14 @@ pub fn run<T: App>(app: T, attr: WindowAttributes) {
     let size = window.inner_size();
     io.window_size = Vec2::new(size.width as f32, size.height as f32);
     let proxy = event_loop.create_proxy();
+    let mut reusable_paint = Paint::default();
+    reusable_paint.set_anti_alias(true);
     let mut app = Renderer::<T> {
         app,
         graphic: None,
         cache: Cache {
             io,
+            reusable_paint,
             image: Images::new(),
             proxy,
             font: Fonts::new(),
@@ -292,6 +295,7 @@ fn font_style(mode: &Mode) -> FontStyle {
 pub struct Cache {
     pub io: Io,
     // pub bus: SignalBus,
+    pub reusable_paint: Paint,
     pub image: Images,
     pub proxy: EventLoopProxy<Message>,
     pub font: Fonts,
