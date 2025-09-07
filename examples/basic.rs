@@ -27,6 +27,17 @@ pub struct Head {
     listeners: Plug<Listeners>,
 }
 
+// fn build_element_raw() -> Element {
+//     let mut frame = Frame::new();
+//     frame.size = Vec2::new(Size::Man(40.0), Size::Window);
+//     let element = Element {
+//         tag: Tag::Def,
+//         genus: Genus::Frame(frame),
+//         bound: Bound::new(),
+//         listener: Some(2),
+//     };
+//     element
+// }
 impl Head {
     pub fn new() -> Self {
         let path = load_plugin("D:/project/rust/plug/out/current_plugin.txt");
@@ -56,20 +67,15 @@ impl Head {
 impl App for Head {
     fn draw(&mut self, cache: &mut juste_skia::renderer::Cache, canvas: &skia_safe::Canvas) {
         self.io_event(&cache.io);
-        unsafe {
-            first_pass(
-                &mut *self.element.data,
-                cache,
-                &mut *self.listeners.data,
-                &mut *self.sheet.data,
-            );
-            second_pass(
-                &mut *self.element.data,
-                canvas,
-                cache,
-                &mut *self.sheet.data,
-            );
-        }
+        //unsafe {
+        first_pass(
+            &mut self.element.data,
+            cache,
+            &mut self.listeners.data,
+            &mut self.sheet.data,
+        );
+        second_pass(&mut self.element.data, canvas, cache, &mut self.sheet.data);
+        //}
     }
 
     fn user_event(

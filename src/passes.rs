@@ -863,6 +863,7 @@ fn draw(
 fn u8_to_str(u8: &[u8]) -> &str {
     unsafe { str::from_utf8_unchecked(u8) }
 }
+
 fn highlight(edit: &mut Edit) {
     match edit.highlight.dirt {
         Dirt::On(i) => {
@@ -933,7 +934,7 @@ fn build_path(rec: &Rect, bound: &mut Bound) -> Path {
     let mut matrix = Matrix::new_identity();
     matrix
         .pre_translate((cx, cy))
-        .pre_rotate(*bound.angle.as_ref().unwrap(), None)
+        .pre_rotate(*bound.angle.as_ref().unwrap_or(&0.0), None)
         .pre_translate((-cx, -cy));
     path.transform(&matrix);
     path
